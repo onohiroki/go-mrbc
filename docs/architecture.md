@@ -87,6 +87,33 @@ Prism's `locals` array is also used to predeclare variables that are assigned
 later in the same scope, preserving Ruby's "assignment anywhere in the scope"
 semantics.
 
+### Keyword arguments
+
+When a method, block, or lambda declares keyword parameters, the VM reserves a
+hidden keyword dictionary register immediately after the positional
+parameters, followed by the hidden block register. Named keyword locals are
+allocated after those slots. The compiler emits `KARG`, `KEY_P`, and `KEYEND`
+in the prologue to extract required keywords, apply optional keyword defaults,
+and reject unknown keywords.
+
+A call with keyword arguments places key/value pairs in consecutive registers
+after the positional arguments and encodes their count in the high nibble of
+the send operand. A keyword hash (`**hash`) is passed as a single hash register
+using the reserved count 15.
+
+### Class, module, and lambda scopes
+
+Class and module bodies execute as separate ireps through `CLASS`/`MODULE`
+followed by `EXEC`. `class << expr` first evaluates `expr`, obtains its
+singleton class with `SCLASS`, and executes the body with the same `EXEC`
+mechanism. Their `R0` is the class or module object, they do not have an
+`OP_ENTER`, and they reserve no implicit block register. Class-body locals and
+blocks inside the body use the same upvar mechanism as other scopes.
+
+Lambdas are compiled as strict closure ireps created with `LAMBDA`. They
+reserve a block register like methods, use `RETURN` for both explicit
+`return` and `next`, and cannot yield to an enclosing method.
+
 ## Register machine
 
 mruby bytecode is a register machine. Expression evaluation uses a stack of

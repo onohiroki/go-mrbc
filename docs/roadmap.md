@@ -15,8 +15,12 @@ English summary.
 - [x] Blocks, `yield`, and `return`
 - [x] Arrays, hashes, ranges, string interpolation
 - [x] `raise` (without rescue)
-- [ ] Classes, modules, instance variables
-- [ ] Keyword arguments, splats, lambdas, multiple assignment
+- [x] Classes, modules, instance and class variables, constants
+- [x] Inheritance, `super`, class and singleton methods, `class << self`
+- [x] Keyword arguments, splats, block arguments
+- [x] Lambdas and procs
+- [x] Multiple assignment (including splat targets)
+- [x] `for` loops
 - [ ] `begin` / `rescue` / `ensure`
 - [ ] Optimized opcodes
 
@@ -53,6 +57,10 @@ English summary.
 - Lambdas and procs.
 - Multiple assignment.
 
+Status: implemented for the supported subset. See
+[Compatibility](compatibility.md#known-limitations) for the remaining
+restrictions.
+
 ## M3 - Exceptions and control flow
 
 - `begin` / `rescue` / `ensure` and catch handlers.
@@ -64,7 +72,7 @@ English summary.
 
 - Optimized opcodes for arithmetic, comparison, and calls.
 - Pattern matching.
-- `defined?`, `class << self`, `alias`, and `undef`.
+- `defined?`, `alias`, and `undef`.
 - Performance and size improvements.
 
 ## Parallel project: pure-Go mruby VM

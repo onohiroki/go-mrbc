@@ -32,23 +32,26 @@ milestones. Features are enabled as their compiler support lands.
 | `%w` word arrays | Supported |
 | Local variables and closures | Supported |
 | Global variables | Supported |
-| Local/global operator assignment (`+=`, `||=`, `&&=`) | Supported |
-| Constants (read) | Supported |
+| Instance and class variables | Supported |
+| Constants (simple writes, reads, and `A::B` reads) | Supported |
+| Operator assignment (`+=`, `||=`, `&&=` on locals, globals, ivars, cvars) | Supported |
 | `if` / `unless` / `elsif` / `while` / `until` | Supported |
 | `case` / `when` | Supported |
 | `&&`, `||`, `!` | Supported |
 | Method calls, positional arguments | Supported |
 | `def` with required, optional, and rest parameters | Supported |
+| Keyword parameters and keyword arguments | Supported |
+| Splat arguments and block arguments (`&blk`) | Supported |
 | Blocks and `yield` | Supported |
-| `break` / `next` in `while` / `until` loops | Supported |
-| `return` from methods (and `return` from blocks) | Supported |
+| `break` / `next` (loops, blocks, lambdas) | Supported |
+| `return` from methods and blocks | Supported |
 | `raise` | Supported |
-| Classes, modules, inheritance, `super` | Planned |
-| Instance variables and constants (write) | Planned |
-| Keyword arguments, splat arguments | Planned |
-| `lambda` / `proc` | Planned |
-| Multiple assignment | Planned |
-| `for` | Planned |
+| Classes, modules, inheritance, `super` | Supported |
+| Nested classes and `A::B` class definitions | Supported |
+| Class methods, singleton methods, and `class << self` | Supported |
+| `lambda` / `proc` | Supported |
+| Multiple assignment (including splat targets) | Supported |
+| `for` | Supported |
 | `begin` / `rescue` / `ensure` / `retry` | Planned (late) |
 | Pattern matching (`case` / `in`) | Planned (late) |
 
@@ -59,20 +62,23 @@ table is kept in sync with the implementation rather than the ambition.
 
 The current subset is intentionally conservative:
 
-- `break` and `next` are only implemented for `while` and `until` loops.
-  Using them inside a block is rejected with a compile error rather than
-  compiled with incorrect non-local control flow.
-- `yield` is supported directly in a method body. Yielding from inside a
-  nested block is rejected until the environment handling is implemented.
-- `for` loops are not implemented yet.
-- Block arguments can be declared (`def f(&b)`) and called (`b.call`), but
-  forwarding a block with `g(&b)` is not supported at call sites.
-- Keyword arguments, splat arguments, and multiple assignment are rejected.
-- Operator assignment to targets other than locals and globals is rejected
+- `yield` is supported in a method body and in blocks nested inside that
+  method. Yielding from class bodies or lambdas is rejected.
+- `for` loops support a single local, global, instance-variable, or constant
+  target. Destructuring targets (`for a, b in ...`) are rejected.
+- Anonymous block forwarding (`def f(&); g(&); end`) is rejected.
+- Keyword arguments combined with positional splats in the same call are
+  rejected (`f(*a, k: 1)`).
+- Keyword splats combined with explicit keyword pairs are rejected
+  (`f(**h, k: 1)`).
+- Explicit keyword arguments to `super` are rejected, as is forwarding from a
+  method that declares both named keywords and `**rest`.
+- Multiple assignment supports local, global, instance-variable, constant, and
+  splat targets. Index/attribute targets (`a[0], b = ...`) are rejected.
+- Nested constant writes (`A::X = 1`) are rejected; `A::X` reads work.
+- Operator assignment to attributes and index expressions is rejected
   (for example `a[0] += 1` and `obj.attr ||= 1`).
-- Methods with post parameters or keyword parameters are rejected.
-- Classes, modules, and singleton methods are rejected.
-- Lambda literals are rejected.
+- Methods with post parameters are rejected.
 - `begin` / `rescue` / `ensure` are rejected.
 
 These restrictions are checked during compilation and produce
@@ -85,13 +91,11 @@ column. They are never silently ignored.
 
 Current explicit rejections include:
 
-- `for` loops (until block-scope emulation is implemented)
 - `begin` / `rescue` / `ensure` (until the exception milestone)
-- lambda literals and numbered block parameters
+- numbered block parameters and anonymous block forwarding
 - safe navigation (`&.`) and other unimplemented node kinds
 - pattern matching
-- `alias`, `undef`, and singleton class definitions
-- `defined?`
+- `alias`, `undef`, and `defined?`
 - `BEGIN` / `END` blocks
 - regular expressions, until runtime support is chosen
 - `eval`, `load`, and `require` (host responsibilities)

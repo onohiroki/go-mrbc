@@ -9,8 +9,9 @@ import (
 
 // Compiler lowers the internal IR to mruby 4.0.0 bytecode.
 type Compiler struct {
-	source *frontend.Source
-	err    error
+	source     *frontend.Source
+	err        error
+	forCounter int
 }
 
 // Compile compiles a lowered program into a top-level irep.
@@ -88,9 +89,23 @@ func (c *Compiler) compileMethod(parent *scope, def *frontend.DefExpr) *bytecode
 		return nil
 	}
 	aspec, ainfo := s.enterAspec()
-	s.methodInfo = &methodInfo{aspec: aspec, ainfo: ainfo}
+	s.methodInfo = &methodInfo{
+		aspec:       aspec,
+		ainfo:       ainfo,
+		blockSlot:   s.blockSlot,
+		keywordSlot: s.keywordSlot,
+	}
+	for _, param := range s.params {
+		switch param.Kind {
+		case frontend.ParamKeyword, frontend.ParamOptionalKeyword:
+			s.methodInfo.keywordParams = append(s.methodInfo.keywordParams, param)
+		case frontend.ParamKeywordRest:
+			s.methodInfo.hasKeywordRest = true
+		}
+	}
 	s.emit(bytecode.OpENTER, aspec)
 	c.emitOptionalDefaults(s)
+	c.emitKeywordInit(s)
 
 	sp0 := s.sp
 	if len(def.Body) == 0 {
@@ -117,6 +132,7 @@ func (c *Compiler) compileBlock(parent *scope, block *frontend.Block) *bytecode.
 	aspec, _ := s.enterAspec()
 	s.emit(bytecode.OpENTER, aspec)
 	c.emitOptionalDefaults(s)
+	c.emitKeywordInit(s)
 
 	sp0 := s.sp
 	if len(block.Body) == 0 {
@@ -130,6 +146,53 @@ func (c *Compiler) compileBlock(parent *scope, block *frontend.Block) *bytecode.
 
 	if err := s.finish(); err != nil {
 		c.fail(block.Pos, "%v", err)
+		return nil
+	}
+	return s.irep
+}
+
+func (c *Compiler) compileLambda(parent *scope, lambda *frontend.LambdaExpr) *bytecode.Irep {
+	s := c.newScope(parent, scopeLambda, lambda.Params, lambda.Locals)
+	if c.err != nil {
+		return nil
+	}
+	aspec, _ := s.enterAspec()
+	s.emit(bytecode.OpENTER, aspec)
+	c.emitOptionalDefaults(s)
+	c.emitKeywordInit(s)
+
+	sp0 := s.sp
+	if len(lambda.Body) == 0 {
+		s.emit(bytecode.OpRETNIL)
+	} else {
+		dst := s.alloc(1)
+		c.compileBody(s, lambda.Body, dst)
+		s.emit(bytecode.OpRETURN, uint32(dst))
+		s.sp = sp0
+	}
+
+	if err := s.finish(); err != nil {
+		c.fail(lambda.Position(), "%v", err)
+		return nil
+	}
+	return s.irep
+}
+
+func (c *Compiler) compileClassBody(parent *scope, locals []string, body []frontend.Expr, pos frontend.Position) *bytecode.Irep {
+	s := c.newScope(parent, scopeClass, nil, locals)
+	if c.err != nil {
+		return nil
+	}
+	sp0 := s.sp
+	if len(body) > 0 {
+		dst := s.alloc(1)
+		c.compileBody(s, body, dst)
+		s.sp = sp0
+	}
+	s.emit(bytecode.OpRETURN, 0)
+
+	if err := s.finish(); err != nil {
+		c.fail(pos, "%v", err)
 		return nil
 	}
 	return s.irep
@@ -172,4 +235,57 @@ func (c *Compiler) emitOptionalDefaults(s *scope) {
 		s.sp = sp0
 	}
 	s.asm.bind(end)
+}
+
+func (c *Compiler) emitKeywordInit(s *scope) {
+	var required []frontend.Param
+	var optional []frontend.Param
+	hasKeywordRest := false
+	for _, param := range s.params {
+		switch param.Kind {
+		case frontend.ParamKeyword:
+			required = append(required, param)
+		case frontend.ParamOptionalKeyword:
+			optional = append(optional, param)
+		case frontend.ParamKeywordRest:
+			hasKeywordRest = true
+		}
+	}
+	if len(required) == 0 && len(optional) == 0 {
+		return
+	}
+
+	for _, param := range required {
+		slot, ok := s.locals[param.Name]
+		if !ok {
+			c.fail(param.Pos, "compiler: unknown keyword parameter %q", param.Name)
+			return
+		}
+		s.emit(bytecode.OpKARG, uint32(slot), s.sym(param.Name))
+	}
+
+	sp0 := s.sp
+	for _, param := range optional {
+		slot, ok := s.locals[param.Name]
+		if !ok {
+			c.fail(param.Pos, "compiler: unknown keyword parameter %q", param.Name)
+			return
+		}
+		have := s.asm.newLabel()
+		done := s.asm.newLabel()
+		s.emit(bytecode.OpKEY_P, uint32(slot), s.sym(param.Name))
+		s.asm.jmpIf(bytecode.OpJMPIF, slot, have)
+		value := s.alloc(1)
+		c.compileExpr(s, param.Default, value)
+		s.emitMove(slot, value)
+		s.sp = sp0
+		s.asm.jmp(done)
+		s.asm.bind(have)
+		s.emit(bytecode.OpKARG, uint32(slot), s.sym(param.Name))
+		s.asm.bind(done)
+	}
+
+	if !hasKeywordRest {
+		s.emit(bytecode.OpKEYEND)
+	}
 }

@@ -13,9 +13,10 @@ project and is not part of this repository.
 ## Status
 
 This project is under active development. The RITE writer, opcode codec, Prism
-lowering, and the first practical macro subset (scalars, control flow, methods,
-blocks, arrays, hashes, ranges, and `raise`) are implemented and tested against
-mruby 4.0.0.
+lowering, and the first two practical macro milestones are implemented and
+tested against mruby 4.0.0: scalars, control flow, methods, blocks, classes,
+modules, inheritance, `super`, instance/class variables, constants, keyword
+arguments, splats, lambdas, multiple assignment, and `raise`.
 
 | Component | Status |
 | --- | --- |
@@ -23,9 +24,11 @@ mruby 4.0.0.
 | Opcode encoder / decoder | Implemented |
 | Prism AST lowering | Implemented for the current subset |
 | Scalar expressions and control flow | Implemented |
-| Methods and blocks | Implemented |
-| Classes and modules | Planned |
-| `begin` / `rescue` / `ensure` | Planned (late) |
+| Methods, blocks, and closures | Implemented |
+| Classes, modules, and inheritance | Implemented |
+| Keyword arguments, splats, lambdas | Implemented |
+| Multiple assignment | Implemented |
+| `begin` / `rescue` / `ensure` | Planned |
 | Peephole optimizer | Not planned initially |
 
 See [Compatibility](docs/compatibility.md) for the exact supported subset and

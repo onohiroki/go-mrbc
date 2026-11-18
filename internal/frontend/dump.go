@@ -71,8 +71,84 @@ func dumpExpr(w io.Writer, expr Expr, depth int) error {
 	case *GlobalWrite:
 		fmt.Fprintf(w, "%sgvar-write %s\n", prefix, e.Name)
 		return dumpExpr(w, e.Value, depth+1)
+	case *InstanceRead:
+		fmt.Fprintf(w, "%sivar %s\n", prefix, e.Name)
+	case *InstanceWrite:
+		fmt.Fprintf(w, "%sivar-write %s\n", prefix, e.Name)
+		return dumpExpr(w, e.Value, depth+1)
+	case *ClassVariableRead:
+		fmt.Fprintf(w, "%scvar %s\n", prefix, e.Name)
+	case *ClassVariableWrite:
+		fmt.Fprintf(w, "%scvar-write %s\n", prefix, e.Name)
+		return dumpExpr(w, e.Value, depth+1)
 	case *ConstantRead:
 		fmt.Fprintf(w, "%sconst %s\n", prefix, e.Name)
+	case *ConstantWrite:
+		fmt.Fprintf(w, "%sconst-write %s\n", prefix, e.Name)
+		return dumpExpr(w, e.Value, depth+1)
+	case *ConstantPathRead:
+		fmt.Fprintf(w, "%sconst-path %s\n", prefix, e.Name)
+		return dumpExpr(w, e.Parent, depth+1)
+	case *ClassDef:
+		fmt.Fprintf(w, "%sclass %s locals=%v\n", prefix, e.Name, e.Locals)
+		if e.Outer != nil {
+			fmt.Fprintf(w, "%s  outer\n", prefix)
+			if err := dumpExpr(w, e.Outer, depth+2); err != nil {
+				return err
+			}
+		}
+		if e.Superclass != nil {
+			fmt.Fprintf(w, "%s  superclass\n", prefix)
+			if err := dumpExpr(w, e.Superclass, depth+2); err != nil {
+				return err
+			}
+		}
+		return dumpBody(w, e.Body, depth+1)
+	case *ModuleDef:
+		fmt.Fprintf(w, "%smodule %s locals=%v\n", prefix, e.Name, e.Locals)
+		if e.Outer != nil {
+			fmt.Fprintf(w, "%s  outer\n", prefix)
+			if err := dumpExpr(w, e.Outer, depth+2); err != nil {
+				return err
+			}
+		}
+		return dumpBody(w, e.Body, depth+1)
+	case *SingletonClassDef:
+		fmt.Fprintf(w, "%ssingleton-class locals=%v\n", prefix, e.Locals)
+		if err := dumpExpr(w, e.Expression, depth+1); err != nil {
+			return err
+		}
+		return dumpBody(w, e.Body, depth+1)
+	case *ForExpr:
+		fmt.Fprintf(w, "%sfor %s\n", prefix, e.Target.Name)
+		fmt.Fprintf(w, "%s  collection\n", prefix)
+		if err := dumpExpr(w, e.Collection, depth+2); err != nil {
+			return err
+		}
+		fmt.Fprintf(w, "%s  body\n", prefix)
+		return dumpBody(w, e.Body, depth+2)
+	case *LambdaExpr:
+		fmt.Fprintf(w, "%slambda params=%v locals=%v\n", prefix, paramNames(e.Params), e.Locals)
+		return dumpBody(w, e.Body, depth+1)
+	case *SuperExpr:
+		fmt.Fprintf(w, "%ssuper forwarding=%v nargs=%d\n", prefix, e.Forwarding, len(e.Args))
+		for _, arg := range e.Args {
+			if err := dumpExpr(w, arg, depth+1); err != nil {
+				return err
+			}
+		}
+		if e.BlockArg != nil {
+			fmt.Fprintf(w, "%s  block-arg\n", prefix)
+			if err := dumpExpr(w, e.BlockArg, depth+2); err != nil {
+				return err
+			}
+		}
+	case *MultiWrite:
+		fmt.Fprintf(w, "%smultiple-assignment targets=%d\n", prefix, len(e.Targets))
+		return dumpExpr(w, e.Value, depth+1)
+	case *SplatArg:
+		fmt.Fprintf(w, "%ssplat\n", prefix)
+		return dumpExpr(w, e.Value, depth+1)
 	case *ArrayLiteral:
 		fmt.Fprintf(w, "%sarray\n", prefix)
 		for _, element := range e.Elements {
@@ -115,6 +191,27 @@ func dumpExpr(w io.Writer, expr Expr, depth int) error {
 		}
 		for _, arg := range e.Args {
 			if err := dumpExpr(w, arg, depth+1); err != nil {
+				return err
+			}
+		}
+		for _, pair := range e.Keywords {
+			fmt.Fprintf(w, "%s  keyword\n", prefix)
+			if err := dumpExpr(w, pair.Key, depth+2); err != nil {
+				return err
+			}
+			if err := dumpExpr(w, pair.Value, depth+2); err != nil {
+				return err
+			}
+		}
+		if e.KeywordSplat != nil {
+			fmt.Fprintf(w, "%s  keyword-splat\n", prefix)
+			if err := dumpExpr(w, e.KeywordSplat, depth+2); err != nil {
+				return err
+			}
+		}
+		if e.BlockArg != nil {
+			fmt.Fprintf(w, "%s  block-arg\n", prefix)
+			if err := dumpExpr(w, e.BlockArg, depth+2); err != nil {
 				return err
 			}
 		}
@@ -220,6 +317,7 @@ func paramNames(params []Param) []string {
 	names := make([]string, len(params))
 	for i, param := range params {
 		prefix := ""
+		suffix := ""
 		switch param.Kind {
 		case ParamOptional:
 			prefix = "?"
@@ -227,8 +325,15 @@ func paramNames(params []Param) []string {
 			prefix = "*"
 		case ParamBlock:
 			prefix = "&"
+		case ParamKeyword:
+			suffix = ":"
+		case ParamOptionalKeyword:
+			prefix = "?"
+			suffix = ":"
+		case ParamKeywordRest:
+			prefix = "**"
 		}
-		names[i] = prefix + param.Name
+		names[i] = prefix + param.Name + suffix
 	}
 	return names
 }

@@ -14,11 +14,17 @@ const (
 	scopeTop scopeKind = iota
 	scopeMethod
 	scopeBlock
+	scopeClass
+	scopeLambda
 )
 
 type methodInfo struct {
-	aspec uint32
-	ainfo int
+	aspec          uint32
+	ainfo          int
+	blockSlot      int
+	keywordSlot    int
+	keywordParams  []frontend.Param
+	hasKeywordRest bool
 }
 
 type loopKind uint8
@@ -53,27 +59,35 @@ type scope struct {
 	methodInfo *methodInfo
 	yieldLevel int // block scopes between this scope and its method, or -1
 	loop       *loopInfo
+
+	blockSlot   int
+	keywordSlot int
+	forDepth    int
 }
 
 func (c *Compiler) newScope(parent *scope, kind scopeKind, params []frontend.Param, locals []string) *scope {
 	s := &scope{
-		c:      c,
-		parent: parent,
-		kind:   kind,
-		irep:   &bytecode.Irep{},
-		asm:    newAssembler(),
-		locals: make(map[string]int),
-		params: params,
+		c:           c,
+		parent:      parent,
+		kind:        kind,
+		irep:        &bytecode.Irep{},
+		asm:         newAssembler(),
+		locals:      make(map[string]int),
+		params:      params,
+		blockSlot:   -1,
+		keywordSlot: -1,
 	}
 
 	if parent != nil {
 		s.method = parent.method
 		s.yieldLevel = parent.yieldLevel
+		s.forDepth = parent.forDepth
 	}
 	switch kind {
 	case scopeMethod:
 		s.method = s
 		s.yieldLevel = 0
+		s.forDepth = 0
 	case scopeBlock:
 		switch {
 		case parent == nil:
@@ -85,6 +99,12 @@ func (c *Compiler) newScope(parent *scope, kind scopeKind, params []frontend.Par
 		default:
 			s.yieldLevel = -1
 		}
+	case scopeClass, scopeLambda:
+		s.method = nil
+		s.yieldLevel = -1
+		if kind == scopeClass {
+			s.forDepth = 0
+		}
 	}
 
 	if err := s.initLocals(locals); err != nil {
@@ -95,47 +115,90 @@ func (c *Compiler) newScope(parent *scope, kind scopeKind, params []frontend.Par
 
 func (s *scope) initLocals(locals []string) error {
 	next := 1 // R0 is self
-	add := func(name string) error {
+	bind := func(name string, slot int) error {
 		if name == "" {
 			return fmt.Errorf("compiler: empty local variable name")
 		}
+		if existing, exists := s.locals[name]; exists {
+			if existing != slot {
+				return fmt.Errorf("compiler: duplicate local variable %q", name)
+			}
+			return nil
+		}
+		if slot > math.MaxUint16 {
+			return fmt.Errorf("compiler: too many local variables")
+		}
+		s.locals[name] = slot
+		return nil
+	}
+	add := func(name string) error {
 		if _, exists := s.locals[name]; exists {
 			return nil
 		}
-		if next > math.MaxUint16 {
-			return fmt.Errorf("compiler: too many local variables")
+		if err := bind(name, next); err != nil {
+			return err
 		}
-		s.locals[name] = next
 		next++
 		return nil
 	}
 
 	positional := 0
+	hasKeywords := false
+	var keywordRest *frontend.Param
 	var blockParam *frontend.Param
 	for i := range s.params {
 		param := &s.params[i]
-		if param.Kind == frontend.ParamBlock {
-			blockParam = param
-			continue
-		}
-		if err := add(param.Name); err != nil {
-			return err
-		}
-		positional++
-	}
-
-	if s.kind == scopeMethod || s.kind == scopeBlock {
-		blockPos := 1 + positional
-		if blockParam != nil {
-			if err := add(blockParam.Name); err != nil {
+		switch param.Kind {
+		case frontend.ParamRequired, frontend.ParamOptional, frontend.ParamRest:
+			if err := add(param.Name); err != nil {
 				return err
 			}
-			if s.locals[blockParam.Name] != blockPos {
-				return fmt.Errorf("compiler: block parameter %q is not in the block slot", blockParam.Name)
+			positional++
+		case frontend.ParamKeyword, frontend.ParamOptionalKeyword:
+			hasKeywords = true
+		case frontend.ParamKeywordRest:
+			hasKeywords = true
+			keywordRest = param
+		case frontend.ParamBlock:
+			blockParam = param
+		}
+	}
+
+	if s.kind == scopeMethod || s.kind == scopeBlock || s.kind == scopeLambda {
+		if hasKeywords {
+			keywordSlot := 1 + positional
+			s.keywordSlot = keywordSlot
+			next = keywordSlot + 1
+			if keywordRest != nil {
+				if err := bind(keywordRest.Name, keywordSlot); err != nil {
+					return err
+				}
+			}
+			blockSlot := keywordSlot + 1
+			s.blockSlot = blockSlot
+			next = blockSlot + 1
+			if blockParam != nil {
+				if err := bind(blockParam.Name, blockSlot); err != nil {
+					return err
+				}
+			}
+			for i := range s.params {
+				param := &s.params[i]
+				if param.Kind == frontend.ParamKeyword || param.Kind == frontend.ParamOptionalKeyword {
+					if err := add(param.Name); err != nil {
+						return err
+					}
+				}
 			}
 		} else {
-			// The VM always stores the incoming block in this register.
-			next = blockPos + 1
+			blockSlot := 1 + positional
+			s.blockSlot = blockSlot
+			next = blockSlot + 1
+			if blockParam != nil {
+				if err := bind(blockParam.Name, blockSlot); err != nil {
+					return err
+				}
+			}
 		}
 	}
 
@@ -158,6 +221,13 @@ func (s *scope) alloc(n int) int {
 		s.maxsp = s.sp
 	}
 	return base
+}
+
+func (s *scope) setSP(reg int) {
+	s.sp = reg
+	if reg > s.maxsp {
+		s.maxsp = reg
+	}
 }
 
 func (s *scope) emit(op bytecode.Opcode, operands ...uint32) {
@@ -209,8 +279,12 @@ func (s *scope) resolveUpvar(name string, depth int) (slot int, level int, ok bo
 	return slot, depth - 1, true
 }
 
+func (s *scope) effectiveDepth(depth int) int {
+	return depth + s.forDepth
+}
+
 func (s *scope) enterAspec() (uint32, int) {
-	var req, opt, rest, block int
+	var req, opt, rest, post, keywords, keywordRest, block int
 	for _, param := range s.params {
 		switch param.Kind {
 		case frontend.ParamRequired:
@@ -219,12 +293,24 @@ func (s *scope) enterAspec() (uint32, int) {
 			opt++
 		case frontend.ParamRest:
 			rest = 1
+		case frontend.ParamKeyword, frontend.ParamOptionalKeyword:
+			keywords++
+		case frontend.ParamKeywordRest:
+			keywordRest = 1
 		case frontend.ParamBlock:
 			block = 1
 		}
 	}
-	aspec := uint32(req<<18 | opt<<13 | rest<<12 | block)
+	if req > 31 || opt > 31 || post > 31 || keywords > 31 || req+opt > 63 {
+		s.c.fail(frontend.Position{}, "compiler: too many formal arguments")
+		return 0, -1
+	}
+	aspec := uint32(req<<18 | opt<<13 | rest<<12 | post<<7 | keywords<<2 | keywordRest<<1 | block)
 	ainfo := ((req + opt) & 0x3f) << 7
 	ainfo |= rest << 6
+	ainfo |= post << 1
+	if keywords > 0 || keywordRest != 0 {
+		ainfo |= 1
+	}
 	return aspec, ainfo
 }

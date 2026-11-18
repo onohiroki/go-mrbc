@@ -273,6 +273,108 @@ func (l *lowerer) lowerExpr(node parser.Node) (Expr, error) {
 
 	case *parser.ConstantReadNode:
 		return &ConstantRead{exprBase: base(pos), Name: n.Name}, nil
+	case *parser.ConstantPathNode:
+		if n.Parent == nil {
+			if n.Name == nil {
+				return nil, l.errorf(n, "dynamic constant name is not supported")
+			}
+			return &ConstantRead{exprBase: base(pos), Name: *n.Name}, nil
+		}
+		parent, err := l.lowerExpr(n.Parent)
+		if err != nil {
+			return nil, err
+		}
+		if n.Name == nil {
+			return nil, l.errorf(n, "dynamic constant name is not supported")
+		}
+		return &ConstantPathRead{exprBase: base(pos), Parent: parent, Name: *n.Name}, nil
+	case *parser.ConstantWriteNode:
+		value, err := l.lowerExpr(n.Value)
+		if err != nil {
+			return nil, err
+		}
+		return &ConstantWrite{exprBase: base(pos), Name: n.Name, Value: value}, nil
+
+	case *parser.InstanceVariableReadNode:
+		return &InstanceRead{exprBase: base(pos), Name: n.Name}, nil
+	case *parser.InstanceVariableWriteNode:
+		value, err := l.lowerExpr(n.Value)
+		if err != nil {
+			return nil, err
+		}
+		return &InstanceWrite{exprBase: base(pos), Name: n.Name, Value: value}, nil
+	case *parser.InstanceVariableOperatorWriteNode:
+		value, err := l.lowerExpr(n.Value)
+		if err != nil {
+			return nil, err
+		}
+		call := &Call{
+			exprBase: base(pos),
+			Receiver: &InstanceRead{exprBase: base(pos), Name: n.Name},
+			Name:     n.BinaryOperator,
+			Args:     []Expr{value},
+		}
+		return &InstanceWrite{exprBase: base(pos), Name: n.Name, Value: call}, nil
+	case *parser.InstanceVariableOrWriteNode:
+		value, err := l.lowerExpr(n.Value)
+		if err != nil {
+			return nil, err
+		}
+		return &OrExpr{
+			exprBase: base(pos),
+			Left:     &InstanceRead{exprBase: base(pos), Name: n.Name},
+			Right:    &InstanceWrite{exprBase: base(pos), Name: n.Name, Value: value},
+		}, nil
+	case *parser.InstanceVariableAndWriteNode:
+		value, err := l.lowerExpr(n.Value)
+		if err != nil {
+			return nil, err
+		}
+		return &AndExpr{
+			exprBase: base(pos),
+			Left:     &InstanceRead{exprBase: base(pos), Name: n.Name},
+			Right:    &InstanceWrite{exprBase: base(pos), Name: n.Name, Value: value},
+		}, nil
+	case *parser.ClassVariableReadNode:
+		return &ClassVariableRead{exprBase: base(pos), Name: n.Name}, nil
+	case *parser.ClassVariableWriteNode:
+		value, err := l.lowerExpr(n.Value)
+		if err != nil {
+			return nil, err
+		}
+		return &ClassVariableWrite{exprBase: base(pos), Name: n.Name, Value: value}, nil
+	case *parser.ClassVariableOperatorWriteNode:
+		value, err := l.lowerExpr(n.Value)
+		if err != nil {
+			return nil, err
+		}
+		call := &Call{
+			exprBase: base(pos),
+			Receiver: &ClassVariableRead{exprBase: base(pos), Name: n.Name},
+			Name:     n.BinaryOperator,
+			Args:     []Expr{value},
+		}
+		return &ClassVariableWrite{exprBase: base(pos), Name: n.Name, Value: call}, nil
+	case *parser.ClassVariableOrWriteNode:
+		value, err := l.lowerExpr(n.Value)
+		if err != nil {
+			return nil, err
+		}
+		return &OrExpr{
+			exprBase: base(pos),
+			Left:     &ClassVariableRead{exprBase: base(pos), Name: n.Name},
+			Right:    &ClassVariableWrite{exprBase: base(pos), Name: n.Name, Value: value},
+		}, nil
+	case *parser.ClassVariableAndWriteNode:
+		value, err := l.lowerExpr(n.Value)
+		if err != nil {
+			return nil, err
+		}
+		return &AndExpr{
+			exprBase: base(pos),
+			Left:     &ClassVariableRead{exprBase: base(pos), Name: n.Name},
+			Right:    &ClassVariableWrite{exprBase: base(pos), Name: n.Name, Value: value},
+		}, nil
 
 	case *parser.ArrayNode:
 		elements := make([]Expr, 0, len(n.Elements))
@@ -389,6 +491,8 @@ func (l *lowerer) lowerExpr(node parser.Node) (Expr, error) {
 
 	case *parser.CaseNode:
 		return l.lowerCase(n)
+	case *parser.ForNode:
+		return l.lowerFor(n)
 	case *parser.DefNode:
 		return l.lowerDef(n)
 
@@ -453,20 +557,25 @@ func (l *lowerer) lowerExpr(node parser.Node) (Expr, error) {
 		return statementsExpr(body, pos), nil
 
 	case *parser.MultiWriteNode:
-		return nil, l.errorf(n, "multiple assignment is not supported yet")
-	case *parser.InstanceVariableOperatorWriteNode, *parser.InstanceVariableAndWriteNode,
-		*parser.InstanceVariableOrWriteNode, *parser.ConstantOperatorWriteNode,
-		*parser.ConstantAndWriteNode, *parser.ConstantOrWriteNode,
-		*parser.CallOperatorWriteNode, *parser.CallAndWriteNode, *parser.CallOrWriteNode,
+		return l.lowerMultiWrite(n)
+	case *parser.ConstantOperatorWriteNode, *parser.ConstantAndWriteNode,
+		*parser.ConstantOrWriteNode, *parser.CallOperatorWriteNode,
+		*parser.CallAndWriteNode, *parser.CallOrWriteNode,
 		*parser.IndexOperatorWriteNode, *parser.IndexAndWriteNode, *parser.IndexOrWriteNode:
 		return nil, l.errorf(n, "operator assignment for this target is not supported yet")
 
-	case *parser.ClassNode, *parser.ModuleNode, *parser.SingletonClassNode:
-		return nil, l.errorf(n, "classes and modules are not supported yet")
+	case *parser.ClassNode:
+		return l.lowerClass(n)
+	case *parser.ModuleNode:
+		return l.lowerModule(n)
+	case *parser.SingletonClassNode:
+		return l.lowerSingletonClass(n)
 	case *parser.LambdaNode:
-		return nil, l.errorf(n, "lambda literals are not supported yet")
-	case *parser.SuperNode, *parser.ForwardingSuperNode:
-		return nil, l.errorf(n, "super is not supported yet")
+		return l.lowerLambda(n)
+	case *parser.SuperNode:
+		return l.lowerSuper(n)
+	case *parser.ForwardingSuperNode:
+		return l.lowerForwardingSuper(n)
 	case *parser.DefinedNode:
 		return nil, l.errorf(n, "defined? is not supported yet")
 	case *parser.RegularExpressionNode, *parser.InterpolatedRegularExpressionNode,
@@ -564,8 +673,13 @@ func (l *lowerer) lowerCase(n *parser.CaseNode) (Expr, error) {
 }
 
 func (l *lowerer) lowerDef(n *parser.DefNode) (Expr, error) {
+	var receiver Expr
 	if n.Receiver != nil {
-		return nil, l.errorf(n, "singleton method definitions are not supported yet")
+		var err error
+		receiver, err = l.lowerExpr(n.Receiver)
+		if err != nil {
+			return nil, err
+		}
 	}
 	params, err := l.lowerParameters(n.Parameters)
 	if err != nil {
@@ -578,6 +692,7 @@ func (l *lowerer) lowerDef(n *parser.DefNode) (Expr, error) {
 	return &DefExpr{
 		exprBase: base(l.pos(n)),
 		Name:     n.Name,
+		Receiver: receiver,
 		Params:   params,
 		Body:     body,
 		Locals:   append([]string(nil), n.Locals...),
@@ -620,11 +735,34 @@ func (l *lowerer) lowerParameters(params *parser.ParametersNode) ([]Param, error
 	if len(params.Posts) > 0 {
 		return nil, l.errorf(params.Posts[0], "post parameters are not supported yet")
 	}
-	if len(params.Keywords) > 0 {
-		return nil, l.errorf(params.Keywords[0], "keyword parameters are not supported yet")
+	for _, node := range params.Keywords {
+		switch keyword := node.(type) {
+		case *parser.RequiredKeywordParameterNode:
+			out = append(out, Param{Pos: l.pos(node), Name: keyword.Name, Kind: ParamKeyword})
+		case *parser.OptionalKeywordParameterNode:
+			value, err := l.lowerExpr(keyword.Value)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, Param{
+				Pos:     l.pos(node),
+				Name:    keyword.Name,
+				Kind:    ParamOptionalKeyword,
+				Default: value,
+			})
+		default:
+			return nil, l.unsupported(node)
+		}
 	}
 	if params.KeywordRest != nil {
-		return nil, l.errorf(params.KeywordRest, "keyword rest parameters are not supported yet")
+		rest, ok := params.KeywordRest.(*parser.KeywordRestParameterNode)
+		if !ok {
+			return nil, l.unsupported(params.KeywordRest)
+		}
+		if rest.Name == nil {
+			return nil, l.errorf(rest, "anonymous keyword rest parameters are not supported yet")
+		}
+		out = append(out, Param{Pos: l.pos(rest), Name: *rest.Name, Kind: ParamKeywordRest})
 	}
 	if params.Block != nil {
 		if params.Block.Name == nil {
@@ -647,7 +785,7 @@ func (l *lowerer) lowerCall(n *parser.CallNode) (Expr, error) {
 			return nil, err
 		}
 	}
-	args, err := l.lowerArguments(n.Arguments)
+	args, keywords, keywordSplat, blockArg, err := l.lowerCallParts(n.Arguments)
 	if err != nil {
 		return nil, err
 	}
@@ -659,42 +797,351 @@ func (l *lowerer) lowerCall(n *parser.CallNode) (Expr, error) {
 		if err != nil {
 			return nil, err
 		}
+	case *parser.BlockArgumentNode:
+		if b.Expression == nil {
+			return nil, l.errorf(b, "anonymous block forwarding is not supported yet")
+		}
+		blockArg, err = l.lowerExpr(b.Expression)
+		if err != nil {
+			return nil, err
+		}
 	default:
 		return nil, l.errorf(n.Block, "block argument forwarding is not supported yet")
 	}
 	return &Call{
-		exprBase: base(l.pos(n)),
-		Receiver: receiver,
-		Name:     n.Name,
-		Args:     args,
-		Block:    block,
+		exprBase:     base(l.pos(n)),
+		Receiver:     receiver,
+		Name:         n.Name,
+		Args:         args,
+		Keywords:     keywords,
+		KeywordSplat: keywordSplat,
+		Block:        block,
+		BlockArg:     blockArg,
 	}, nil
 }
 
-func (l *lowerer) lowerBlock(n *parser.BlockNode) (*Block, error) {
-	var params []Param
-	var declaredLocals []string
-	switch p := n.Parameters.(type) {
-	case nil:
-	case *parser.BlockParametersNode:
-		var err error
-		params, err = l.lowerParameters(p.Parameters)
+func (l *lowerer) lowerCallParts(args *parser.ArgumentsNode) ([]Expr, []HashPair, Expr, Expr, error) {
+	if args == nil {
+		return nil, nil, nil, nil, nil
+	}
+	var positional []Expr
+	var keywords []HashPair
+	var keywordSplat Expr
+	var blockArg Expr
+	for _, node := range args.Arguments {
+		switch arg := node.(type) {
+		case *parser.SplatNode:
+			value, err := l.lowerExpr(arg.Expression)
+			if err != nil {
+				return nil, nil, nil, nil, err
+			}
+			positional = append(positional, &SplatArg{exprBase: base(l.pos(node)), Value: value})
+		case *parser.KeywordHashNode:
+			for _, element := range arg.Elements {
+				switch entry := element.(type) {
+				case *parser.AssocNode:
+					symbol, ok := entry.Key.(*parser.SymbolNode)
+					if !ok {
+						return nil, nil, nil, nil, l.errorf(entry.Key, "only symbol keyword arguments are supported")
+					}
+					value, err := l.lowerExpr(entry.Value)
+					if err != nil {
+						return nil, nil, nil, nil, err
+					}
+					keywords = append(keywords, HashPair{
+						Key:   &SymbolLiteral{exprBase: base(l.pos(entry.Key)), Value: symbol.Unescaped.Value},
+						Value: value,
+					})
+				case *parser.AssocSplatNode:
+					if keywordSplat != nil {
+						return nil, nil, nil, nil, l.errorf(entry, "multiple keyword splats are not supported")
+					}
+					value, err := l.lowerExpr(entry.Value)
+					if err != nil {
+						return nil, nil, nil, nil, err
+					}
+					keywordSplat = value
+				default:
+					return nil, nil, nil, nil, l.unsupported(element)
+				}
+			}
+		case *parser.BlockArgumentNode:
+			if arg.Expression == nil {
+				return nil, nil, nil, nil, l.errorf(arg, "anonymous block forwarding is not supported yet")
+			}
+			value, err := l.lowerExpr(arg.Expression)
+			if err != nil {
+				return nil, nil, nil, nil, err
+			}
+			blockArg = value
+		case *parser.ForwardingArgumentsNode:
+			return nil, nil, nil, nil, l.errorf(node, "argument forwarding is not supported yet")
+		default:
+			expr, err := l.lowerExpr(node)
+			if err != nil {
+				return nil, nil, nil, nil, err
+			}
+			positional = append(positional, expr)
+		}
+	}
+	return positional, keywords, keywordSplat, blockArg, nil
+}
+
+func (l *lowerer) lowerClass(n *parser.ClassNode) (Expr, error) {
+	name, outer, err := l.lowerConstantTarget(n.ConstantPath)
+	if err != nil {
+		return nil, err
+	}
+	var superclass Expr
+	if n.Superclass != nil {
+		superclass, err = l.lowerExpr(n.Superclass)
 		if err != nil {
 			return nil, err
 		}
-		for _, local := range p.Locals {
+	}
+	body, err := l.lowerBody(n.Body)
+	if err != nil {
+		return nil, err
+	}
+	return &ClassDef{
+		exprBase:   base(l.pos(n)),
+		Name:       name,
+		Outer:      outer,
+		Superclass: superclass,
+		Body:       body,
+		Locals:     append([]string(nil), n.Locals...),
+	}, nil
+}
+
+func (l *lowerer) lowerModule(n *parser.ModuleNode) (Expr, error) {
+	name, outer, err := l.lowerConstantTarget(n.ConstantPath)
+	if err != nil {
+		return nil, err
+	}
+	body, err := l.lowerBody(n.Body)
+	if err != nil {
+		return nil, err
+	}
+	return &ModuleDef{
+		exprBase: base(l.pos(n)),
+		Name:     name,
+		Outer:    outer,
+		Body:     body,
+		Locals:   append([]string(nil), n.Locals...),
+	}, nil
+}
+
+func (l *lowerer) lowerConstantTarget(node parser.Node) (string, Expr, error) {
+	switch n := node.(type) {
+	case *parser.ConstantReadNode:
+		return n.Name, nil, nil
+	case *parser.ConstantPathNode:
+		if n.Parent == nil {
+			if n.Name == nil {
+				return "", nil, l.errorf(n, "dynamic constant name is not supported")
+			}
+			return *n.Name, nil, nil
+		}
+		parent, err := l.lowerExpr(n.Parent)
+		if err != nil {
+			return "", nil, err
+		}
+		if n.Name == nil {
+			return "", nil, l.errorf(n, "dynamic constant name is not supported")
+		}
+		return *n.Name, parent, nil
+	default:
+		return "", nil, l.unsupported(node)
+	}
+}
+
+func (l *lowerer) lowerSingletonClass(n *parser.SingletonClassNode) (Expr, error) {
+	expression, err := l.lowerExpr(n.Expression)
+	if err != nil {
+		return nil, err
+	}
+	body, err := l.lowerBody(n.Body)
+	if err != nil {
+		return nil, err
+	}
+	return &SingletonClassDef{
+		exprBase:   base(l.pos(n)),
+		Expression: expression,
+		Body:       body,
+		Locals:     append([]string(nil), n.Locals...),
+	}, nil
+}
+
+func (l *lowerer) lowerLambda(n *parser.LambdaNode) (Expr, error) {
+	params, locals, err := l.lowerBlockParameters(n.Parameters)
+	if err != nil {
+		return nil, err
+	}
+	locals = dedupeStrings(append(locals, n.Locals...))
+	body, err := l.lowerBody(n.Body)
+	if err != nil {
+		return nil, err
+	}
+	return &LambdaExpr{
+		exprBase: base(l.pos(n)),
+		Params:   params,
+		Body:     body,
+		Locals:   locals,
+	}, nil
+}
+
+func (l *lowerer) lowerSuper(n *parser.SuperNode) (Expr, error) {
+	args, keywords, keywordSplat, blockArg, err := l.lowerCallParts(n.Arguments)
+	if err != nil {
+		return nil, err
+	}
+	if len(keywords) > 0 || keywordSplat != nil {
+		return nil, l.errorf(n, "keyword arguments to super are not supported yet")
+	}
+	var block *Block
+	if n.Block != nil {
+		blockNode, ok := n.Block.(*parser.BlockNode)
+		if !ok {
+			return nil, l.errorf(n.Block, "block argument forwarding is not supported yet")
+		}
+		block, err = l.lowerBlock(blockNode)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &SuperExpr{
+		exprBase: base(l.pos(n)),
+		Args:     args,
+		Block:    block,
+		BlockArg: blockArg,
+	}, nil
+}
+
+func (l *lowerer) lowerForwardingSuper(n *parser.ForwardingSuperNode) (Expr, error) {
+	var block *Block
+	if n.Block != nil {
+		var err error
+		block, err = l.lowerBlock(n.Block)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &SuperExpr{exprBase: base(l.pos(n)), Forwarding: true, Block: block}, nil
+}
+
+func (l *lowerer) lowerMultiWrite(n *parser.MultiWriteNode) (Expr, error) {
+	targets := make([]MultiTarget, 0, len(n.Lefts))
+	for _, node := range n.Lefts {
+		target, err := l.lowerMultiTarget(node)
+		if err != nil {
+			return nil, err
+		}
+		targets = append(targets, target)
+	}
+	var rest *MultiTarget
+	if n.Rest != nil {
+		splat, ok := n.Rest.(*parser.SplatNode)
+		if !ok {
+			return nil, l.unsupported(n.Rest)
+		}
+		if splat.Expression != nil {
+			target, err := l.lowerMultiTarget(splat.Expression)
+			if err != nil {
+				return nil, err
+			}
+			rest = &target
+		}
+	}
+	posts := make([]MultiTarget, 0, len(n.Rights))
+	for _, node := range n.Rights {
+		target, err := l.lowerMultiTarget(node)
+		if err != nil {
+			return nil, err
+		}
+		posts = append(posts, target)
+	}
+	if rest == nil && len(posts) > 0 {
+		return nil, l.errorf(n, "post targets without a splat target are not supported")
+	}
+	value, err := l.lowerExpr(n.Value)
+	if err != nil {
+		return nil, err
+	}
+	return &MultiWrite{
+		exprBase: base(l.pos(n)),
+		Targets:  targets,
+		Rest:     rest,
+		Posts:    posts,
+		Value:    value,
+	}, nil
+}
+
+func (l *lowerer) lowerMultiTarget(node parser.Node) (MultiTarget, error) {
+	pos := l.pos(node)
+	switch target := node.(type) {
+	case *parser.LocalVariableTargetNode:
+		return MultiTarget{Pos: pos, Kind: TargetLocal, Name: target.Name, Depth: int(target.Depth)}, nil
+	case *parser.GlobalVariableTargetNode:
+		return MultiTarget{Pos: pos, Kind: TargetGlobal, Name: target.Name}, nil
+	case *parser.InstanceVariableTargetNode:
+		return MultiTarget{Pos: pos, Kind: TargetInstance, Name: target.Name}, nil
+	case *parser.ConstantTargetNode:
+		return MultiTarget{Pos: pos, Kind: TargetConstant, Name: target.Name}, nil
+	default:
+		return MultiTarget{}, l.errorf(node, "unsupported multiple assignment target: %s", nodeName(node))
+	}
+}
+
+func (l *lowerer) lowerFor(n *parser.ForNode) (Expr, error) {
+	target, err := l.lowerMultiTarget(n.Index)
+	if err != nil {
+		return nil, err
+	}
+	collection, err := l.lowerExpr(n.Collection)
+	if err != nil {
+		return nil, err
+	}
+	body, err := l.lowerStatements(n.Statements)
+	if err != nil {
+		return nil, err
+	}
+	return &ForExpr{
+		exprBase:   base(l.pos(n)),
+		Target:     target,
+		Collection: collection,
+		Body:       body,
+	}, nil
+}
+
+func (l *lowerer) lowerBlockParameters(node parser.Node) ([]Param, []string, error) {
+	switch params := node.(type) {
+	case nil:
+		return nil, nil, nil
+	case *parser.BlockParametersNode:
+		lowered, err := l.lowerParameters(params.Parameters)
+		if err != nil {
+			return nil, nil, err
+		}
+		var locals []string
+		for _, local := range params.Locals {
 			if blockLocal, ok := local.(*parser.BlockLocalVariableNode); ok {
-				declaredLocals = append(declaredLocals, blockLocal.Name)
+				locals = append(locals, blockLocal.Name)
 			}
 		}
+		return lowered, locals, nil
 	case *parser.NumberedParametersNode, *parser.ItParametersNode:
-		return nil, l.errorf(n, "numbered block parameters are not supported yet")
+		return nil, nil, l.errorf(node, "numbered block parameters are not supported yet")
 	default:
-		return nil, l.unsupported(n.Parameters)
+		return nil, nil, l.unsupported(node)
 	}
-	locals := append([]string(nil), declaredLocals...)
-	locals = append(locals, n.Locals...)
-	locals = dedupeStrings(locals)
+}
+
+func (l *lowerer) lowerBlock(n *parser.BlockNode) (*Block, error) {
+	params, declaredLocals, err := l.lowerBlockParameters(n.Parameters)
+	if err != nil {
+		return nil, err
+	}
+	locals := dedupeStrings(append(declaredLocals, n.Locals...))
 	body, err := l.lowerBody(n.Body)
 	if err != nil {
 		return nil, err

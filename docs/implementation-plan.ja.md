@@ -249,7 +249,7 @@ noblock:1 req:5 opt:5 rest:1 post:5 key:5 kdict:1 block:1
 - `begin/rescue/ensure`
 - `retry` / `redo`
 - パターンマッチング `case/in`
-- `alias` / `undef`、`class << self`、特異メソッド
+- `alias` / `undef`
 - `defined?`、safe navigation `&.`
 - `__FILE__` / `__LINE__`、特殊変数
 - `-g`（DBG）、LVAR
@@ -356,30 +356,44 @@ M1 完了時点で「手続き型＋ブロック＋配列/ハッシュ」のマ�
 - `internal/frontend`: Prism AST → 自前 IR、位置付きエラー、IR ダンプ
 - `internal/compiler`:
   - ローカル変数・upvar（`GETUPVAR`/`SETUPVAR`）
-  - ローカル/グローバルの複合代入（`+=`, `||=`, `&&=`）
+  - ローカル/グローバル/ivars/クラス変数の複合代入（`+=`, `||=`, `&&=`）
   - リテラル、配列、ハッシュ、範囲、文字列補間
   - `if/unless/elsif`、`while/until`、`case/when`、`&&/||/!`
-  - `def`（必須・オプショナル・rest 引数）、`return`
-  - ブロック、`yield`、ブロック引数 `&b`（メソッド内）
+  - `def`（必須・オプショナル・rest・キーワード引数）、`return`
+  - ブロック、`yield`、ブロック引数 `&b`、splat 呼び出し
   - `break`/`next`（while/until）
   - `raise`（例外の捕捉なし）
+  - クラス/モジュール、継承、`super`（通常・zsuper）、クラスメソッド、
+    特異メソッド、`class << self`、ネストしたクラス、`A::B` 形式のクラス定義
+  - インスタンス変数、クラス変数、定数の読み書き、`A::B` 定数参照
+  - キーワード引数（必須・オプショナル・`**rest`）、キーワード hash 呼び出し
+  - `lambda` / `proc`、ラムダ内の `return` / `next`
+  - 多重代入（ローカル・グローバル・ivars・定数・splat ターゲット）
+  - `for` ループ（単一ターゲット）
 - `mrbc` パッケージと `gomrbc` CLI
 - 差分実行テスト（`mrbc --no-optimize` と mruby 4.0.0 をオラクルに使用）
 - 適合コーパス `testdata/conformance/`
 
 ### 現時点の制限
 
-- `break`/`next` は while/until のみ。ブロック内はエラー
-- `yield` はメソッド本体直下のみ。ネストしたブロック内はエラー
-- `for`、`lambda`、クラス/モジュール、キーワード引数、splat、多重代入は未対応
-- `begin/rescue/ensure` は未対応（M3）
+- `break`/`next` は while/until、ブロック、lambda で利用可能
+- `yield` はメソッド本体と、そのメソッド内のブロックから利用可能。
+  クラス本体や lambda 内からの `yield` はエラー
+- `for` の分割代入ターゲット（`for a, b in ...`）は未対応
+- 無名ブロック引数の転送 `def f(&); g(&); end` は未対応
+- 1 つの呼び出しでキーワード引数と splat 引数の併用は未対応
+- キーワード splat と明示的なキーワードの併用は未対応
+- `super` への明示的なキーワード引数、および「名前付きキーワード + `**rest`」
+  からの zsuper 転送は未対応
+- 多重代入の index/属性ターゲットは未対応（splat ターゲットは対応）
+- 属性・index への複合代入は未対応
+- post 引数、`begin/rescue/ensure`、パターンマッチは未対応
 - DBG / LVAR セクションは未出力のため、実行時エラーの行番号は出ない
 
 ### 次の作業
 
-1. 適合コーパスの拡充（ブロック引数、式としての制御構文、境界値）
-2. M2: クラス/モジュール、ivars、定数代入、super、キーワード引数、lambda
-3. M3: catch handler と rescue/ensure
-4. M4: 最適化 opcode、パフォーマンス
+1. 適合コーパスの拡充（キーワード/splat/クラスの境界ケース）
+2. M3: catch handler と rescue/ensure、`alias` / `undef`、`defined?`
+3. M4: 最適化 opcode、パフォーマンス、パターンマッチ
 
 M0.5 は M0 と独立しているため、並行して進めてもよい。

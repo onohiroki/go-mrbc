@@ -114,13 +114,22 @@ type ConstantRead struct {
 // Call is a method call. A nil Receiver means an implicit-self call.
 type Call struct {
 	exprBase
-	Receiver Expr
-	Name     string
-	Args     []Expr
-	Block    *Block
+	Receiver     Expr
+	Name         string
+	Args         []Expr // may contain *SplatArg
+	Keywords     []HashPair
+	KeywordSplat Expr
+	Block        *Block
+	BlockArg     Expr
 }
 
 func (c *Call) ImplicitSelf() bool { return c.Receiver == nil }
+
+// SplatArg is a splatted positional argument in a call.
+type SplatArg struct {
+	exprBase
+	Value Expr
+}
 
 type Block struct {
 	Pos    Position
@@ -136,6 +145,9 @@ const (
 	ParamOptional
 	ParamRest
 	ParamBlock
+	ParamKeyword
+	ParamOptionalKeyword
+	ParamKeywordRest
 )
 
 type Param struct {
@@ -215,6 +227,110 @@ type OrExpr struct {
 type NotExpr struct {
 	exprBase
 	Value Expr
+}
+
+type InstanceRead struct {
+	exprBase
+	Name string
+}
+
+type InstanceWrite struct {
+	exprBase
+	Name  string
+	Value Expr
+}
+
+type ClassVariableRead struct {
+	exprBase
+	Name string
+}
+
+type ClassVariableWrite struct {
+	exprBase
+	Name  string
+	Value Expr
+}
+
+type ConstantWrite struct {
+	exprBase
+	Name  string
+	Value Expr
+}
+
+type ConstantPathRead struct {
+	exprBase
+	Parent Expr
+	Name   string
+}
+
+type ClassDef struct {
+	exprBase
+	Name       string
+	Outer      Expr // nil for a top-level class name
+	Superclass Expr // nil for Object
+	Body       []Expr
+	Locals     []string
+}
+
+type ModuleDef struct {
+	exprBase
+	Name   string
+	Outer  Expr
+	Body   []Expr
+	Locals []string
+}
+
+type SingletonClassDef struct {
+	exprBase
+	Expression Expr
+	Body       []Expr
+	Locals     []string
+}
+
+type SuperExpr struct {
+	exprBase
+	Args       []Expr
+	Forwarding bool
+	Block      *Block
+	BlockArg   Expr
+}
+
+type LambdaExpr struct {
+	exprBase
+	Params []Param
+	Body   []Expr
+	Locals []string
+}
+
+type MultiTargetKind uint8
+
+const (
+	TargetLocal MultiTargetKind = iota
+	TargetGlobal
+	TargetInstance
+	TargetConstant
+)
+
+type MultiTarget struct {
+	Pos   Position
+	Kind  MultiTargetKind
+	Name  string
+	Depth int
+}
+
+type MultiWrite struct {
+	exprBase
+	Targets []MultiTarget
+	Rest    *MultiTarget
+	Posts   []MultiTarget
+	Value   Expr
+}
+
+type ForExpr struct {
+	exprBase
+	Target     MultiTarget
+	Collection Expr
+	Body       []Expr
 }
 
 func base(pos Position) exprBase { return exprBase{Pos: pos} }

@@ -18,12 +18,15 @@ func TestUnsupportedSyntax(t *testing.T) {
 		src  string
 		want string
 	}{
-		{"class", "class C\nend\n", "classes and modules"},
+		{"defined", "defined?(x)\n", "defined?"},
 		{"rescue", "begin\n  foo\nrescue\n  bar\nend\n", "begin/rescue/ensure"},
-		{"for", "for x in [1]\n  puts x\nend\n", "ForNode"},
-		{"lambda", "f = ->(x) { x }\n", "lambda literals"},
+		{"for destructuring", "for a, b in [[1, 2]]\n  puts a\nend\n", "unsupported multiple assignment target"},
+		{"index target", "a = [1]\na[0], b = [1, 2]\n", "unsupported multiple assignment target"},
+		{"keyword and splat", "a = [1]\nf(*a, k: 1)\n", "keyword arguments combined with splat"},
+		{"keyword splat and keys", "h = {}\nf(**h, k: 1)\n", "keyword splats combined with explicit keywords"},
+		{"post parameter", "def f(a, *b, c)\nend\n", "post parameters"},
+		{"anonymous block parameter", "def f(&)\nend\n", "anonymous block parameters"},
 		{"safe navigation", "x = nil\nx&.to_s\n", "safe navigation"},
-		{"multiple assignment", "a, b = 1, 2\n", "multiple assignment"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
