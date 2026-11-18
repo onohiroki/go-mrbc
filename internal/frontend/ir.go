@@ -333,4 +333,34 @@ type ForExpr struct {
 	Body       []Expr
 }
 
+type BeginExpr struct {
+	exprBase
+	Body    []Expr
+	Rescues []RescueClause
+	Else    []Expr
+	Ensure  []Expr
+}
+
+type RescueClause struct {
+	Pos     Position
+	Classes []Expr
+	Target  *MultiTarget
+	Body    []Expr
+}
+
+type RetryExpr struct{ exprBase }
+
+type RedoExpr struct{ exprBase }
+
+type AliasExpr struct {
+	exprBase
+	NewName string
+	OldName string
+}
+
+type UndefExpr struct {
+	exprBase
+	Names []string
+}
+
 func base(pos Position) exprBase { return exprBase{Pos: pos} }

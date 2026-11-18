@@ -80,8 +80,8 @@ A catch handler is:
 | end | 4 | absolute byte offset into `iseq`, exclusive |
 | target | 4 | absolute byte offset into `iseq` |
 
-Catch handlers are not emitted until the exception milestone; the field is
-nevertheless always present.
+Catch handlers are emitted for `rescue` and `ensure` constructs. `clen` is zero
+when no handler is present.
 
 ### Literal pool
 

@@ -135,6 +135,10 @@ func (c *Compiler) compileBlock(parent *scope, block *frontend.Block) *bytecode.
 	c.emitKeywordInit(s)
 
 	sp0 := s.sp
+	redoLabel := s.asm.newLabel()
+	s.asm.bind(redoLabel)
+	prevRedo, prevHasRedo := s.redoTarget, s.hasRedo
+	s.redoTarget, s.hasRedo = redoLabel, true
 	if len(block.Body) == 0 {
 		s.emit(bytecode.OpRETNIL)
 	} else {
@@ -143,6 +147,7 @@ func (c *Compiler) compileBlock(parent *scope, block *frontend.Block) *bytecode.
 		s.emit(bytecode.OpRETURN, uint32(dst))
 		s.sp = sp0
 	}
+	s.redoTarget, s.hasRedo = prevRedo, prevHasRedo
 
 	if err := s.finish(); err != nil {
 		c.fail(block.Pos, "%v", err)
@@ -162,6 +167,10 @@ func (c *Compiler) compileLambda(parent *scope, lambda *frontend.LambdaExpr) *by
 	c.emitKeywordInit(s)
 
 	sp0 := s.sp
+	redoLabel := s.asm.newLabel()
+	s.asm.bind(redoLabel)
+	prevRedo, prevHasRedo := s.redoTarget, s.hasRedo
+	s.redoTarget, s.hasRedo = redoLabel, true
 	if len(lambda.Body) == 0 {
 		s.emit(bytecode.OpRETNIL)
 	} else {
@@ -170,6 +179,7 @@ func (c *Compiler) compileLambda(parent *scope, lambda *frontend.LambdaExpr) *by
 		s.emit(bytecode.OpRETURN, uint32(dst))
 		s.sp = sp0
 	}
+	s.redoTarget, s.hasRedo = prevRedo, prevHasRedo
 
 	if err := s.finish(); err != nil {
 		c.fail(lambda.Position(), "%v", err)

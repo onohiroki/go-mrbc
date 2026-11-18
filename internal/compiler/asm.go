@@ -14,10 +14,18 @@ type fixup struct {
 	label label
 }
 
+type catchRef struct {
+	typ    uint8
+	begin  label
+	end    label
+	target label
+}
+
 type assembler struct {
 	code      []byte
 	labels    map[label]int
 	fixups    []fixup
+	catches   []catchRef
 	nextLabel label
 	err       error
 }
@@ -59,6 +67,19 @@ func (a *assembler) jmp(l label) {
 	start := len(a.code)
 	a.emit(bytecode.OpJMP, 0)
 	a.fixups = append(a.fixups, fixup{pos: start + 1, base: start + 3, label: l})
+}
+
+func (a *assembler) jmpuw(l label) {
+	if a.err != nil {
+		return
+	}
+	start := len(a.code)
+	a.emit(bytecode.OpJMPUW, 0)
+	a.fixups = append(a.fixups, fixup{pos: start + 1, base: start + 3, label: l})
+}
+
+func (a *assembler) addCatch(typ uint8, begin, end, target label) {
+	a.catches = append(a.catches, catchRef{typ: typ, begin: begin, end: end, target: target})
 }
 
 func (a *assembler) jmpIf(op bytecode.Opcode, reg int, l label) {

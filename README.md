@@ -13,10 +13,10 @@ project and is not part of this repository.
 ## Status
 
 This project is under active development. The RITE writer, opcode codec, Prism
-lowering, and the first two practical macro milestones are implemented and
+lowering, and the first three practical macro milestones are implemented and
 tested against mruby 4.0.0: scalars, control flow, methods, blocks, classes,
 modules, inheritance, `super`, instance/class variables, constants, keyword
-arguments, splats, lambdas, multiple assignment, and `raise`.
+arguments, splats, lambdas, multiple assignment, exceptions, and `raise`.
 
 | Component | Status |
 | --- | --- |
@@ -28,7 +28,9 @@ arguments, splats, lambdas, multiple assignment, and `raise`.
 | Classes, modules, and inheritance | Implemented |
 | Keyword arguments, splats, lambdas | Implemented |
 | Multiple assignment | Implemented |
-| `begin` / `rescue` / `ensure` | Planned |
+| `begin` / `rescue` / `ensure` / `retry` | Implemented |
+| `alias` / `undef` | Implemented |
+| Debug information (`-g`, LVAR/DBG) | Not implemented |
 | Peephole optimizer | Not planned initially |
 
 See [Compatibility](docs/compatibility.md) for the exact supported subset and

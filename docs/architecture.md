@@ -114,6 +114,22 @@ Lambdas are compiled as strict closure ireps created with `LAMBDA`. They
 reserve a block register like methods, use `RETURN` for both explicit
 `return` and `next`, and cannot yield to an enclosing method.
 
+### Exceptions and unwinding
+
+`begin` / `rescue` / `ensure` are compiled with mruby's catch-handler table.
+Each handler records absolute byte offsets for the protected range and the
+handler target. Ensure entries are registered before rescue entries for the
+same construct, and nested constructs append their entries later; mruby
+searches the table backwards, so the innermost handler wins.
+
+Rescue handlers start with `EXCEPT`, test exception classes with `RESCUE`, and
+re-raise unmatched exceptions with `RAISEIF`. Ensure handlers save the pending
+exception with `EXCEPT`, run the ensure body, and re-raise with `RAISEIF`.
+
+Control flow that leaves a protected region (`break`, `next`, `retry`,
+`redo`) is emitted with `JMPUW`, which unwinds ensure handlers on the way.
+`return` and non-local block returns rely on the VM's own return unwinding.
+
 ## Register machine
 
 mruby bytecode is a register machine. Expression evaluation uses a stack of

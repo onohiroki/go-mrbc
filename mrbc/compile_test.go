@@ -19,7 +19,7 @@ func TestUnsupportedSyntax(t *testing.T) {
 		want string
 	}{
 		{"defined", "defined?(x)\n", "defined?"},
-		{"rescue", "begin\n  foo\nrescue\n  bar\nend\n", "begin/rescue/ensure"},
+		{"splat rescue classes", "begin\n  foo\nrescue *ERRORS\n  nil\nend\n", "splat rescue classes"},
 		{"for destructuring", "for a, b in [[1, 2]]\n  puts a\nend\n", "unsupported multiple assignment target"},
 		{"index target", "a = [1]\na[0], b = [1, 2]\n", "unsupported multiple assignment target"},
 		{"keyword and splat", "a = [1]\nf(*a, k: 1)\n", "keyword arguments combined with splat"},

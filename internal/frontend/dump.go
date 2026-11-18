@@ -127,6 +127,40 @@ func dumpExpr(w io.Writer, expr Expr, depth int) error {
 		}
 		fmt.Fprintf(w, "%s  body\n", prefix)
 		return dumpBody(w, e.Body, depth+2)
+	case *BeginExpr:
+		fmt.Fprintf(w, "%sbegin\n", prefix)
+		if err := dumpBody(w, e.Body, depth+1); err != nil {
+			return err
+		}
+		for _, rescue := range e.Rescues {
+			fmt.Fprintf(w, "%srescue\n", prefix)
+			for _, classExpr := range rescue.Classes {
+				if err := dumpExpr(w, classExpr, depth+1); err != nil {
+					return err
+				}
+			}
+			if err := dumpBody(w, rescue.Body, depth+1); err != nil {
+				return err
+			}
+		}
+		if len(e.Else) > 0 {
+			fmt.Fprintf(w, "%selse\n", prefix)
+			if err := dumpBody(w, e.Else, depth+1); err != nil {
+				return err
+			}
+		}
+		if len(e.Ensure) > 0 {
+			fmt.Fprintf(w, "%sensure\n", prefix)
+			return dumpBody(w, e.Ensure, depth+1)
+		}
+	case *RetryExpr:
+		fmt.Fprintf(w, "%sretry\n", prefix)
+	case *RedoExpr:
+		fmt.Fprintf(w, "%sredo\n", prefix)
+	case *AliasExpr:
+		fmt.Fprintf(w, "%salias %s %s\n", prefix, e.NewName, e.OldName)
+	case *UndefExpr:
+		fmt.Fprintf(w, "%sundef %v\n", prefix, e.Names)
 	case *LambdaExpr:
 		fmt.Fprintf(w, "%slambda params=%v locals=%v\n", prefix, paramNames(e.Params), e.Locals)
 		return dumpBody(w, e.Body, depth+1)

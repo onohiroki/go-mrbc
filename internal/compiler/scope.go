@@ -63,6 +63,14 @@ type scope struct {
 	blockSlot   int
 	keywordSlot int
 	forDepth    int
+
+	rescue     *rescueContext
+	redoTarget label
+	hasRedo    bool
+}
+
+type rescueContext struct {
+	retryLabel label
 }
 
 func (c *Compiler) newScope(parent *scope, kind scopeKind, params []frontend.Param, locals []string) *scope {
@@ -247,6 +255,26 @@ func (s *scope) sym(name string) uint32 {
 func (s *scope) finish() error {
 	if err := s.asm.patch(); err != nil {
 		return err
+	}
+	for _, ref := range s.asm.catches {
+		begin, ok := s.asm.labels[ref.begin]
+		if !ok {
+			return fmt.Errorf("compiler: unbound catch begin label %d", ref.begin)
+		}
+		end, ok := s.asm.labels[ref.end]
+		if !ok {
+			return fmt.Errorf("compiler: unbound catch end label %d", ref.end)
+		}
+		target, ok := s.asm.labels[ref.target]
+		if !ok {
+			return fmt.Errorf("compiler: unbound catch target label %d", ref.target)
+		}
+		s.irep.Catch = append(s.irep.Catch, bytecode.CatchHandler{
+			Type:   ref.typ,
+			Begin:  uint32(begin),
+			End:    uint32(end),
+			Target: uint32(target),
+		})
 	}
 	if s.nlocals > math.MaxUint16 {
 		return fmt.Errorf("compiler: too many locals: %d", s.nlocals)

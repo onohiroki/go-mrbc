@@ -52,8 +52,10 @@ milestones. Features are enabled as their compiler support lands.
 | `lambda` / `proc` | Supported |
 | Multiple assignment (including splat targets) | Supported |
 | `for` | Supported |
-| `begin` / `rescue` / `ensure` / `retry` | Planned (late) |
-| Pattern matching (`case` / `in`) | Planned (late) |
+| `begin` / `rescue` / `ensure` / `else` | Supported |
+| `retry` / `redo` | Supported |
+| `alias` / `undef` | Supported |
+| Pattern matching (`case` / `in`) | Planned |
 
 Everything listed as supported is exercised by the conformance suite. The
 table is kept in sync with the implementation rather than the ambition.
@@ -79,7 +81,10 @@ The current subset is intentionally conservative:
 - Operator assignment to attributes and index expressions is rejected
   (for example `a[0] += 1` and `obj.attr ||= 1`).
 - Methods with post parameters are rejected.
-- `begin` / `rescue` / `ensure` are rejected.
+- `defined?` is rejected; mruby 4.0 itself compiles it as a method call.
+- Splat rescue class lists (`rescue *ERRORS`) are rejected.
+- `alias` is limited to method aliases; global-variable aliases are rejected.
+- Debug information is not emitted, so runtime error line numbers are absent.
 
 These restrictions are checked during compilation and produce
 `file:line:column` errors.
@@ -91,11 +96,11 @@ column. They are never silently ignored.
 
 Current explicit rejections include:
 
-- `begin` / `rescue` / `ensure` (until the exception milestone)
 - numbered block parameters and anonymous block forwarding
 - safe navigation (`&.`) and other unimplemented node kinds
 - pattern matching
-- `alias`, `undef`, and `defined?`
+- `defined?`
+- splat rescue class lists and global-variable aliases
 - `BEGIN` / `END` blocks
 - regular expressions, until runtime support is chosen
 - `eval`, `load`, and `require` (host responsibilities)
@@ -113,10 +118,15 @@ their behavior is verified. Optimized opcodes may be added later.
 
 ### Exceptions
 
-In the initial milestones, `raise` is available because it is an ordinary
-method call. Rescuing exceptions requires catch-handler generation and is
-deferred. Programs that use `begin` / `rescue` are rejected with a clear error
-until then.
+`begin` / `rescue` / `ensure` and the `rescue` modifier are supported,
+including multiple rescue clauses, `else`, and rescue-variable binding.
+`retry` is supported inside rescue clauses, and `redo` is supported in loops,
+blocks, lambdas, and `for` bodies. Ensure handlers run when control leaves the
+protected region through `return`, `break`, or `next` because the compiler
+emits `JMPUW` for loop jumps and relies on the VM's return unwinding.
+
+The compiler emits mruby's catch-handler table (rescue and ensure entries)
+directly. Splat rescue class lists are not implemented yet.
 
 ### Debug information
 

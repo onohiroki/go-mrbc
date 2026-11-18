@@ -151,6 +151,20 @@ func (c *Compiler) compileExpr(s *scope, expr frontend.Expr, dst int) {
 		c.compileCase(s, e, dst)
 	case *frontend.ForExpr:
 		c.compileFor(s, e, dst)
+	case *frontend.BeginExpr:
+		c.compileBegin(s, e, dst)
+	case *frontend.RetryExpr:
+		c.compileRetry(s, e)
+	case *frontend.RedoExpr:
+		c.compileRedo(s, e)
+	case *frontend.AliasExpr:
+		s.emit(bytecode.OpALIAS, s.sym(e.NewName), s.sym(e.OldName))
+		s.emit(bytecode.OpLOADNIL, uint32(dst))
+	case *frontend.UndefExpr:
+		for _, name := range e.Names {
+			s.emit(bytecode.OpUNDEF, s.sym(name))
+		}
+		s.emit(bytecode.OpLOADNIL, uint32(dst))
 	case *frontend.DefExpr:
 		c.compileDef(s, e, dst)
 
@@ -221,7 +235,7 @@ func (c *Compiler) compileExpr(s *scope, expr frontend.Expr, dst int) {
 		} else {
 			s.emit(bytecode.OpLOADNIL, uint32(s.loop.resultReg))
 		}
-		s.asm.jmp(s.loop.breakTarget)
+		s.asm.jmpuw(s.loop.breakTarget)
 	case *frontend.NextExpr:
 		if s.kind == scopeBlock || s.kind == scopeLambda {
 			if e.Value == nil {
@@ -241,7 +255,7 @@ func (c *Compiler) compileExpr(s *scope, expr frontend.Expr, dst int) {
 			tmp := s.alloc(1)
 			c.compileExpr(s, e.Value, tmp)
 		}
-		s.asm.jmp(s.loop.continueTarget)
+		s.asm.jmpuw(s.loop.continueTarget)
 
 	case *frontend.YieldExpr:
 		c.compileYield(s, e, dst)
@@ -346,8 +360,13 @@ func (c *Compiler) compileWhile(s *scope, e *frontend.WhileExpr, dst int) {
 	info := &loopInfo{breakTarget: end, continueTarget: start, resultReg: dst}
 	previous := s.loop
 	s.loop = info
+	bodyStart := s.asm.newLabel()
+	s.asm.bind(bodyStart)
+	prevRedo, prevHasRedo := s.redoTarget, s.hasRedo
+	s.redoTarget, s.hasRedo = bodyStart, true
 	body := s.alloc(1)
 	c.compileBody(s, []frontend.Expr{e.Body}, body)
+	s.redoTarget, s.hasRedo = prevRedo, prevHasRedo
 	s.loop = previous
 
 	s.asm.jmp(start)
@@ -643,11 +662,16 @@ func (c *Compiler) compileForBlock(parent *scope, e *frontend.ForExpr) *bytecode
 	}
 
 	sp0 := s.sp
+	redoLabel := s.asm.newLabel()
+	s.asm.bind(redoLabel)
+	prevRedo, prevHasRedo := s.redoTarget, s.hasRedo
+	s.redoTarget, s.hasRedo = redoLabel, true
 	if len(e.Body) > 0 {
 		dst := s.alloc(1)
 		c.compileBody(s, e.Body, dst)
 		s.sp = sp0
 	}
+	s.redoTarget, s.hasRedo = prevRedo, prevHasRedo
 	s.emit(bytecode.OpRETNIL)
 
 	if err := s.finish(); err != nil {
@@ -655,6 +679,132 @@ func (c *Compiler) compileForBlock(parent *scope, e *frontend.ForExpr) *bytecode
 		return nil
 	}
 	return s.irep
+}
+
+func (c *Compiler) compileBegin(s *scope, e *frontend.BeginExpr, dst int) {
+	hasRescue := len(e.Rescues) > 0
+	hasEnsure := len(e.Ensure) > 0
+	if !hasRescue && !hasEnsure {
+		c.compileBody(s, e.Body, dst)
+		if len(e.Else) > 0 {
+			c.compileBody(s, e.Else, dst)
+		}
+		return
+	}
+
+	sp0 := s.sp
+	beginLabel := s.asm.newLabel()
+	after := s.asm.newLabel()
+	s.asm.bind(beginLabel)
+
+	var rescueEnd, rescueTarget label
+	if hasEnsure {
+		s.asm.addCatch(bytecode.CatchEnsure, beginLabel, after, after)
+	}
+	if hasRescue {
+		rescueEnd = s.asm.newLabel()
+		rescueTarget = s.asm.newLabel()
+		s.asm.addCatch(bytecode.CatchRescue, beginLabel, rescueEnd, rescueTarget)
+	}
+
+	if len(e.Body) == 0 {
+		s.emit(bytecode.OpLOADNIL, uint32(dst))
+	} else {
+		c.compileBody(s, e.Body, dst)
+	}
+
+	if hasRescue {
+		if len(e.Else) > 0 {
+			elseLabel := s.asm.newLabel()
+			s.asm.bind(rescueEnd)
+			s.asm.jmp(elseLabel)
+			s.asm.bind(rescueTarget)
+			c.compileRescueHandlers(s, e, dst, beginLabel, after)
+			s.asm.bind(elseLabel)
+			c.compileBody(s, e.Else, dst)
+			s.asm.jmp(after)
+		} else {
+			s.asm.bind(rescueEnd)
+			s.asm.jmp(after)
+			s.asm.bind(rescueTarget)
+			c.compileRescueHandlers(s, e, dst, beginLabel, after)
+		}
+	}
+
+	if hasEnsure {
+		s.asm.bind(after)
+		exc := s.alloc(1)
+		s.emit(bytecode.OpEXCEPT, uint32(exc))
+		esp := s.sp
+		if len(e.Ensure) > 0 {
+			tmp := s.alloc(1)
+			c.compileBody(s, e.Ensure, tmp)
+			s.sp = esp
+		}
+		s.emit(bytecode.OpRAISEIF, uint32(exc))
+	} else {
+		s.asm.bind(after)
+	}
+	s.sp = sp0
+}
+
+func (c *Compiler) compileRescueHandlers(s *scope, e *frontend.BeginExpr, dst int, beginLabel, after label) {
+	exc := s.alloc(1)
+	s.emit(bytecode.OpEXCEPT, uint32(exc))
+	sp0 := s.sp
+
+	for _, clause := range e.Rescues {
+		bodyLabel := s.asm.newLabel()
+		nextLabel := s.asm.newLabel()
+		classReg := s.alloc(1)
+
+		if len(clause.Classes) == 0 {
+			s.emit(bytecode.OpGETCONST, uint32(classReg), s.sym("StandardError"))
+			s.emit(bytecode.OpRESCUE, uint32(exc), uint32(classReg))
+			s.asm.jmpIf(bytecode.OpJMPIF, classReg, bodyLabel)
+			s.asm.jmp(nextLabel)
+		} else {
+			for _, classExpr := range clause.Classes {
+				c.compileExpr(s, classExpr, classReg)
+				s.emit(bytecode.OpRESCUE, uint32(exc), uint32(classReg))
+				s.asm.jmpIf(bytecode.OpJMPIF, classReg, bodyLabel)
+			}
+			s.asm.jmp(nextLabel)
+		}
+
+		s.asm.bind(bodyLabel)
+		if clause.Target != nil {
+			if !c.assignDirect(s, *clause.Target, exc) {
+				return
+			}
+		}
+		previous := s.rescue
+		s.rescue = &rescueContext{retryLabel: beginLabel}
+		c.compileBody(s, clause.Body, dst)
+		s.rescue = previous
+		s.asm.jmp(after)
+		s.asm.bind(nextLabel)
+		s.sp = sp0
+	}
+
+	s.emit(bytecode.OpRAISEIF, uint32(exc))
+	s.asm.jmp(after)
+}
+
+func (c *Compiler) compileRetry(s *scope, e *frontend.RetryExpr) {
+	if s.rescue == nil {
+		c.failExpr(e, "retry outside a rescue clause is not supported")
+		return
+	}
+	s.asm.jmpuw(s.rescue.retryLabel)
+}
+
+func (c *Compiler) compileRedo(s *scope, e *frontend.RedoExpr) {
+	if !s.hasRedo {
+		c.failExpr(e, "redo outside a loop or block is not supported")
+		return
+	}
+	s.asm.jmpuw(s.redoTarget)
 }
 
 func (c *Compiler) compileCall(s *scope, e *frontend.Call, dst int) {

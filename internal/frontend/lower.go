@@ -139,10 +139,11 @@ func (l *lowerer) lowerBody(node parser.Node) ([]Expr, error) {
 	case *parser.StatementsNode:
 		return l.lowerStatements(n)
 	case *parser.BeginNode:
-		if n.RescueClause != nil || n.ElseClause != nil || n.EnsureClause != nil {
-			return nil, l.errorf(n, "begin/rescue/ensure is not supported yet")
+		expr, err := l.lowerBegin(n)
+		if err != nil {
+			return nil, err
 		}
-		return l.lowerStatements(n.Statements)
+		return []Expr{expr}, nil
 	default:
 		expr, err := l.lowerExpr(node)
 		if err != nil {
@@ -547,14 +548,46 @@ func (l *lowerer) lowerExpr(node parser.Node) (Expr, error) {
 		return l.lowerCall(n)
 
 	case *parser.BeginNode:
-		if n.RescueClause != nil || n.ElseClause != nil || n.EnsureClause != nil {
-			return nil, l.errorf(n, "begin/rescue/ensure is not supported yet")
-		}
-		body, err := l.lowerStatements(n.Statements)
+		return l.lowerBegin(n)
+
+	case *parser.RescueModifierNode:
+		expression, err := l.lowerExpr(n.Expression)
 		if err != nil {
 			return nil, err
 		}
-		return statementsExpr(body, pos), nil
+		fallback, err := l.lowerExpr(n.RescueExpression)
+		if err != nil {
+			return nil, err
+		}
+		return &BeginExpr{
+			exprBase: base(pos),
+			Body:     []Expr{expression},
+			Rescues:  []RescueClause{{Pos: pos, Body: []Expr{fallback}}},
+		}, nil
+	case *parser.RetryNode:
+		return &RetryExpr{exprBase: base(pos)}, nil
+	case *parser.RedoNode:
+		return &RedoExpr{exprBase: base(pos)}, nil
+	case *parser.AliasMethodNode:
+		newName, err := l.aliasName(n.NewName)
+		if err != nil {
+			return nil, err
+		}
+		oldName, err := l.aliasName(n.OldName)
+		if err != nil {
+			return nil, err
+		}
+		return &AliasExpr{exprBase: base(pos), NewName: newName, OldName: oldName}, nil
+	case *parser.UndefNode:
+		names := make([]string, 0, len(n.Names))
+		for _, node := range n.Names {
+			name, err := l.aliasName(node)
+			if err != nil {
+				return nil, err
+			}
+			names = append(names, name)
+		}
+		return &UndefExpr{exprBase: base(pos), Names: names}, nil
 
 	case *parser.MultiWriteNode:
 		return l.lowerMultiWrite(n)
@@ -594,6 +627,77 @@ func (l *lowerer) lowerExpr(node parser.Node) (Expr, error) {
 	}
 
 	return nil, l.unsupported(node)
+}
+
+func (l *lowerer) lowerBegin(n *parser.BeginNode) (Expr, error) {
+	pos := l.pos(n)
+	body, err := l.lowerStatements(n.Statements)
+	if err != nil {
+		return nil, err
+	}
+	var rescues []RescueClause
+	for rescue := n.RescueClause; rescue != nil; rescue = rescue.Subsequent {
+		clause := RescueClause{Pos: l.pos(rescue)}
+		for _, exception := range rescue.Exceptions {
+			if _, ok := exception.(*parser.SplatNode); ok {
+				return nil, l.errorf(exception, "splat rescue classes are not supported yet")
+			}
+			expr, err := l.lowerExpr(exception)
+			if err != nil {
+				return nil, err
+			}
+			clause.Classes = append(clause.Classes, expr)
+		}
+		if rescue.Reference != nil {
+			target, err := l.lowerMultiTarget(rescue.Reference)
+			if err != nil {
+				return nil, err
+			}
+			clause.Target = &target
+		}
+		clause.Body, err = l.lowerStatements(rescue.Statements)
+		if err != nil {
+			return nil, err
+		}
+		rescues = append(rescues, clause)
+	}
+	var elseBody []Expr
+	if n.ElseClause != nil {
+		elseBody, err = l.lowerStatements(n.ElseClause.Statements)
+		if err != nil {
+			return nil, err
+		}
+	}
+	var ensureBody []Expr
+	if n.EnsureClause != nil {
+		ensureBody, err = l.lowerStatements(n.EnsureClause.Statements)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if len(rescues) == 0 && len(elseBody) == 0 && len(ensureBody) == 0 {
+		return statementsExpr(body, pos), nil
+	}
+	return &BeginExpr{
+		exprBase: base(pos),
+		Body:     body,
+		Rescues:  rescues,
+		Else:     elseBody,
+		Ensure:   ensureBody,
+	}, nil
+}
+
+func (l *lowerer) aliasName(node parser.Node) (string, error) {
+	switch n := node.(type) {
+	case *parser.SymbolNode:
+		return n.Unescaped.Value, nil
+	case *parser.LocalVariableReadNode:
+		return n.Name, nil
+	case *parser.ConstantReadNode:
+		return n.Name, nil
+	default:
+		return "", l.errorf(node, "unsupported alias name: %s", nodeName(node))
+	}
 }
 
 func (l *lowerer) lowerIf(n *parser.IfNode) (Expr, error) {

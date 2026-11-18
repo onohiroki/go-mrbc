@@ -14,14 +14,15 @@ English summary.
 - [x] Methods with required/optional/rest parameters
 - [x] Blocks, `yield`, and `return`
 - [x] Arrays, hashes, ranges, string interpolation
-- [x] `raise` (without rescue)
 - [x] Classes, modules, instance and class variables, constants
 - [x] Inheritance, `super`, class and singleton methods, `class << self`
 - [x] Keyword arguments, splats, block arguments
 - [x] Lambdas and procs
 - [x] Multiple assignment (including splat targets)
 - [x] `for` loops
-- [ ] `begin` / `rescue` / `ensure`
+- [x] `raise`, `begin` / `rescue` / `ensure`, `retry`, `redo`
+- [x] `alias` / `undef`
+- [ ] Debug information (`-g`, LVAR/DBG)
 - [ ] Optimized opcodes
 
 ## M0 - Parser integration
@@ -66,14 +67,18 @@ restrictions.
 - `begin` / `rescue` / `ensure` and catch handlers.
 - Unwinding across ensures.
 - `retry` and `redo`.
+- `alias` / `undef`.
 - Debug information and local variable sections.
+
+Status: exceptions, unwinding, `retry`/`redo`, `alias`, and `undef` are
+implemented. Debug information remains planned.
 
 ## M4 - Expansion and optimization
 
 - Optimized opcodes for arithmetic, comparison, and calls.
 - Pattern matching.
-- `defined?`, `alias`, and `undef`.
-- Performance and size improvements.
+- `defined?`.
+- Debug information and performance improvements.
 
 ## Parallel project: pure-Go mruby VM
 

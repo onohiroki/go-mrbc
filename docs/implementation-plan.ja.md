@@ -20,7 +20,7 @@
 | 項目 | 決定 |
 | --- | --- |
 | 受け入れ基準 | 動作一致（stdout / stderr / 終了コード）。バイト一致は目指さない |
-| 例外 | M1 / M2 は `raise` のみ。`begin/rescue/ensure` は M3 |
+| 例外 | 初期は `raise` のみ。M3 で `begin/rescue/ensure` まで実装済み |
 | ターゲット | mruby 4.0.0 固定（RITE 04.00） |
 | モジュール | `github.com/onohiroki/go-mrbc` |
 | CLI | `gomrbc` |
@@ -128,8 +128,8 @@ go-mrbc/
   - 16bit / 24bit はビッグエンディアン
   - ジャンプはオペランド終端からの相対オフセット
   - `EXT1` / `EXT2` / `EXT3`
-- catch handler は M3 まで出さない（形式は実装しておく）。
-- LVAR / DBG は最初は出さない（実行には不要であることを確認済み）。
+- catch handler（rescue / ensure）は `begin` のコンパイル時に生成する。
+- LVAR / DBG はまだ出さない（実行には不要であることを確認済み）。
 
 スモークテスト:
 
@@ -198,7 +198,7 @@ noblock:1 req:5 opt:5 rest:1 post:5 key:5 kdict:1 block:1
 - `break` / `next` はループコンテキストのスタックで解決する。
 - ブロック内の `return` は `RETURN_BLK`、メソッド内は `RETURN`。
 - ブロック内の `break` は `OP_BREAK`。
-- `ensure` を跨ぐ制御は M3 まで制限する。
+- `ensure` を跨ぐ `break` / `next` / `retry` / `redo` は `JMPUW` で巻き戻す。
 - 文字列補間は `STRING` + `STRCAT` で実装する。
 
 ### 6.6 クラス・モジュール（M2）
@@ -361,8 +361,10 @@ M1 完了時点で「手続き型＋ブロック＋配列/ハッシュ」のマ�
   - `if/unless/elsif`、`while/until`、`case/when`、`&&/||/!`
   - `def`（必須・オプショナル・rest・キーワード引数）、`return`
   - ブロック、`yield`、ブロック引数 `&b`、splat 呼び出し
-  - `break`/`next`（while/until）
-  - `raise`（例外の捕捉なし）
+  - `break`/`next`（while/until、ブロック、lambda）
+  - `begin/rescue/ensure/else`、catch handler、`retry`、`redo`
+  - `alias` / `undef`
+  - `raise`（例外の送出と捕捉）
   - クラス/モジュール、継承、`super`（通常・zsuper）、クラスメソッド、
     特異メソッド、`class << self`、ネストしたクラス、`A::B` 形式のクラス定義
   - インスタンス変数、クラス変数、定数の読み書き、`A::B` 定数参照
@@ -387,13 +389,13 @@ M1 完了時点で「手続き型＋ブロック＋配列/ハッシュ」のマ�
   からの zsuper 転送は未対応
 - 多重代入の index/属性ターゲットは未対応（splat ターゲットは対応）
 - 属性・index への複合代入は未対応
-- post 引数、`begin/rescue/ensure`、パターンマッチは未対応
+- post 引数、`defined?`、パターンマッチは未対応
+- `rescue *ERRORS` とグローバル変数の `alias` は未対応
 - DBG / LVAR セクションは未出力のため、実行時エラーの行番号は出ない
 
 ### 次の作業
 
-1. 適合コーパスの拡充（キーワード/splat/クラスの境界ケース）
-2. M3: catch handler と rescue/ensure、`alias` / `undef`、`defined?`
-3. M4: 最適化 opcode、パフォーマンス、パターンマッチ
+1. 適合コーパスの拡充（例外・ensure の境界ケース）
+2. M4: DBG / LVAR、パターンマッチ、`defined?`、最適化 opcode
 
 M0.5 は M0 と独立しているため、並行して進めてもよい。
