@@ -112,13 +112,27 @@ func ReadBinary(data []byte) (*Irep, error) {
 			if top == nil {
 				top = irep
 			}
+		case sectionDebug:
+			if top == nil {
+				return nil, fmt.Errorf("bytecode: DBG section appears before IREP")
+			}
+			if err := readDebugSection(top, payload); err != nil {
+				return nil, err
+			}
+		case sectionLV:
+			if top == nil {
+				return nil, fmt.Errorf("bytecode: LVAR section appears before IREP")
+			}
+			if err := readLVSection(top, payload); err != nil {
+				return nil, err
+			}
 		case sectionEnd:
 			if top == nil {
 				return nil, fmt.Errorf("bytecode: no IREP section")
 			}
 			return top, nil
 		default:
-			// Unknown optional sections (DBG, LVAR, ...) are ignored.
+			// Unknown optional sections are ignored.
 		}
 	}
 }
@@ -313,4 +327,180 @@ func readPoolEntry(r *reader) (PoolEntry, error) {
 // that only need the decoded instructions.
 func ReadInstructionSequence(irep *Irep) ([]Instruction, error) {
 	return Decode(irep.Code)
+}
+
+func readLVSection(top *Irep, payload []byte) error {
+	r := &reader{data: payload}
+	count, err := r.readUint32()
+	if err != nil {
+		return err
+	}
+	if count > math.MaxInt32 {
+		return fmt.Errorf("bytecode: LVAR symbol count too large")
+	}
+	syms := make([]string, count)
+	for i := range syms {
+		length, err := r.readUint16()
+		if err != nil {
+			return err
+		}
+		raw, err := r.readBytes(int(length))
+		if err != nil {
+			return err
+		}
+		syms[i] = string(raw)
+	}
+
+	var ireps []*Irep
+	walkIreps(top, func(irep *Irep) { ireps = append(ireps, irep) })
+	for _, irep := range ireps {
+		names := make([]string, irep.Nlocals)
+		for slot := 1; slot < int(irep.Nlocals); slot++ {
+			index, err := r.readUint16()
+			if err != nil {
+				return err
+			}
+			if index != math.MaxUint16 {
+				if int(index) >= len(syms) {
+					return fmt.Errorf("bytecode: LVAR symbol index %d out of range", index)
+				}
+				names[slot] = syms[index]
+			}
+		}
+		irep.LocalNames = names
+	}
+	return nil
+}
+
+func readDebugSection(top *Irep, payload []byte) error {
+	r := &reader{data: payload}
+	filenameCount, err := r.readUint16()
+	if err != nil {
+		return err
+	}
+	filenames := make([]string, filenameCount)
+	for i := range filenames {
+		length, err := r.readUint16()
+		if err != nil {
+			return err
+		}
+		raw, err := r.readBytes(int(length))
+		if err != nil {
+			return err
+		}
+		filenames[i] = string(raw)
+	}
+
+	var ireps []*Irep
+	walkIreps(top, func(irep *Irep) { ireps = append(ireps, irep) })
+	for _, irep := range ireps {
+		recordStart := r.pos
+		recordSize, err := r.readUint32()
+		if err != nil {
+			return err
+		}
+		fileCount, err := r.readUint16()
+		if err != nil {
+			return err
+		}
+		var lines []DebugLine
+		filename := ""
+		for file := 0; file < int(fileCount); file++ {
+			startPos, err := r.readUint32()
+			if err != nil {
+				return err
+			}
+			filenameIndex, err := r.readUint16()
+			if err != nil {
+				return err
+			}
+			if file == 0 && int(filenameIndex) < len(filenames) {
+				filename = filenames[filenameIndex]
+			}
+			lineCount, err := r.readUint32()
+			if err != nil {
+				return err
+			}
+			lineType, err := r.readByte()
+			if err != nil {
+				return err
+			}
+			switch lineType {
+			case 0: // mrb_debug_line_ary
+				for i := uint32(0); i < lineCount; i++ {
+					line, err := r.readUint16()
+					if err != nil {
+						return err
+					}
+					if line != 0 {
+						lines = append(lines, DebugLine{Offset: int32(startPos + i), Line: int32(line)})
+					}
+				}
+			case 1: // mrb_debug_line_flat_map
+				for i := uint32(0); i < lineCount; i++ {
+					pos, err := r.readUint32()
+					if err != nil {
+						return err
+					}
+					line, err := r.readUint16()
+					if err != nil {
+						return err
+					}
+					lines = append(lines, DebugLine{Offset: int32(pos), Line: int32(line)})
+				}
+			case 2: // mrb_debug_line_packed_map
+				if lineCount > math.MaxInt32 {
+					return fmt.Errorf("bytecode: packed debug map too large")
+				}
+				raw, err := r.readBytes(int(lineCount))
+				if err != nil {
+					return err
+				}
+				packed := &reader{data: raw}
+				pos := uint32(0)
+				line := uint32(0)
+				for packed.remaining() > 0 {
+					deltaPos, err := readPackedInt(packed)
+					if err != nil {
+						return err
+					}
+					deltaLine, err := readPackedInt(packed)
+					if err != nil {
+						return err
+					}
+					pos += deltaPos
+					line += deltaLine
+					lines = append(lines, DebugLine{Offset: int32(pos), Line: int32(line)})
+				}
+			default:
+				return fmt.Errorf("bytecode: unknown debug line type %d", lineType)
+			}
+		}
+		consumed := uint32(r.pos - recordStart)
+		if consumed != recordSize {
+			return fmt.Errorf("bytecode: debug record size mismatch: header says %d, read %d", recordSize, consumed)
+		}
+		irep.Filename = filename
+		irep.Lines = lines
+	}
+	return nil
+}
+
+func readPackedInt(r *reader) (uint32, error) {
+	var value uint32
+	var shift uint
+	for {
+		b, err := r.readByte()
+		if err != nil {
+			return 0, err
+		}
+		value |= uint32(b&0x7f) << shift
+		if b&0x80 == 0 {
+			return value, nil
+		}
+		shift += 7
+		if shift >= 32 {
+			return 0, fmt.Errorf("bytecode: packed integer too long")
+		}
+	}
 }

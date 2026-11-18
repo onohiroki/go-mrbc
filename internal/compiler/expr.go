@@ -16,6 +16,7 @@ func (c *Compiler) compileExpr(s *scope, expr frontend.Expr, dst int) {
 		s.emit(bytecode.OpLOADNIL, uint32(dst))
 		return
 	}
+	s.markLine(expr.Position())
 	sp0 := s.sp
 	defer func() { s.sp = sp0 }()
 
@@ -149,6 +150,8 @@ func (c *Compiler) compileExpr(s *scope, expr frontend.Expr, dst int) {
 		c.compileWhile(s, e, dst)
 	case *frontend.CaseExpr:
 		c.compileCase(s, e, dst)
+	case *frontend.CaseMatchExpr:
+		c.compileCaseMatch(s, e, dst)
 	case *frontend.ForExpr:
 		c.compileFor(s, e, dst)
 	case *frontend.BeginExpr:
@@ -414,6 +417,103 @@ func (c *Compiler) compileCase(s *scope, e *frontend.CaseExpr, dst int) {
 	s.asm.bind(end)
 }
 
+func (c *Compiler) compileCaseMatch(s *scope, e *frontend.CaseMatchExpr, dst int) {
+	sp0 := s.sp
+	subject := s.alloc(1)
+	c.compileExpr(s, e.Subject, subject)
+	spAfterSubject := s.sp
+
+	end := s.asm.newLabel()
+	for _, in := range e.Ins {
+		next := s.asm.newLabel()
+		s.sp = spAfterSubject
+		if !c.compilePattern(s, in.Pattern, subject, next) {
+			return
+		}
+		if in.Guard != nil {
+			guard := s.alloc(1)
+			c.compileExpr(s, in.Guard, guard)
+			s.asm.jmpIf(bytecode.OpJMPNOT, guard, next)
+		}
+		s.sp = spAfterSubject
+		c.compileBody(s, in.Body, dst)
+		s.asm.jmp(end)
+		s.asm.bind(next)
+		s.sp = spAfterSubject
+	}
+
+	if e.HasElse {
+		c.compileBody(s, e.Else, dst)
+	} else {
+		s.emit(bytecode.OpLOADFALSE, uint32(dst))
+		s.emit(bytecode.OpMATCHERR, uint32(dst))
+	}
+	s.asm.bind(end)
+	s.sp = sp0
+}
+
+func (c *Compiler) compilePattern(s *scope, pat frontend.Pattern, subject int, fail label) bool {
+	switch p := pat.(type) {
+	case *frontend.ValuePattern:
+		base := s.alloc(2)
+		c.compileExpr(s, p.Value, base)
+		s.emitMove(base+1, subject)
+		s.emit(bytecode.OpSEND, uint32(base), s.sym("==="), 1)
+		s.asm.jmpIf(bytecode.OpJMPNOT, base, fail)
+		return true
+	case *frontend.EqualPattern:
+		base := s.alloc(2)
+		s.emitMove(base, subject)
+		c.compileExpr(s, p.Value, base+1)
+		s.emit(bytecode.OpSEND, uint32(base), s.sym("=="), 1)
+		s.asm.jmpIf(bytecode.OpJMPNOT, base, fail)
+		return true
+	case *frontend.BindPattern:
+		return c.assignDirect(s, p.Target, subject)
+	case *frontend.CapturePattern:
+		if !c.compilePattern(s, p.Value, subject, fail) {
+			return false
+		}
+		return c.assignDirect(s, p.Target, subject)
+	case *frontend.ArrayPattern:
+		if p.Constant != nil {
+			check := &frontend.ValuePattern{Value: p.Constant}
+			if !c.compilePattern(s, check, subject, fail) {
+				return false
+			}
+		}
+		base := s.sp
+		deconstructed := s.alloc(1)
+		s.emitMove(deconstructed, subject)
+		s.emit(bytecode.OpSEND, uint32(deconstructed), s.sym("deconstruct"), 0)
+		size := s.alloc(1)
+		s.emitMove(size, deconstructed)
+		s.emit(bytecode.OpSEND, uint32(size), s.sym("size"), 0)
+		want := s.alloc(1)
+		c.compileInteger(s, want, int64(len(p.Elements)))
+		s.emit(bytecode.OpSEND, uint32(size), s.sym("=="), 1)
+		s.asm.jmpIf(bytecode.OpJMPNOT, size, fail)
+
+		elementBase := s.sp
+		for i, elementPattern := range p.Elements {
+			s.sp = elementBase
+			element := s.alloc(1)
+			s.emitMove(element, deconstructed)
+			index := s.alloc(1)
+			c.compileInteger(s, index, int64(i))
+			s.emit(bytecode.OpSEND, uint32(element), s.sym("[]"), 1)
+			if !c.compilePattern(s, elementPattern, element, fail) {
+				return false
+			}
+		}
+		s.sp = base
+		return true
+	default:
+		c.failExpr(nil, "compiler: unsupported pattern %T", pat)
+		return false
+	}
+}
+
 func (c *Compiler) compileDef(s *scope, e *frontend.DefExpr, dst int) {
 	child := c.compileMethod(s, e)
 	if child == nil {
@@ -631,6 +731,7 @@ func (c *Compiler) compileForBlock(parent *scope, e *frontend.ForExpr) *bytecode
 	if c.err != nil {
 		return nil
 	}
+	s.markLine(e.Position())
 	s.forDepth = parent.forDepth + 1
 
 	aspec, _ := s.enterAspec()

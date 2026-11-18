@@ -1,6 +1,7 @@
 package mrbc_test
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -19,6 +20,9 @@ func TestUnsupportedSyntax(t *testing.T) {
 		want string
 	}{
 		{"defined", "defined?(x)\n", "defined?"},
+		{"hash pattern", "case { a: 1 }\nin { a: }\nend\n", "hash patterns"},
+		{"alternation pattern", "case 1\nin 1 | 2\n  puts 1\nend\n", "alternation patterns"},
+		{"rest pattern", "case [1]\nin [a, *b]\n  puts a\nend\n", "array pattern rest"},
 		{"splat rescue classes", "begin\n  foo\nrescue *ERRORS\n  nil\nend\n", "splat rescue classes"},
 		{"for destructuring", "for a, b in [[1, 2]]\n  puts a\nend\n", "unsupported multiple assignment target"},
 		{"index target", "a = [1]\na[0], b = [1, 2]\n", "unsupported multiple assignment target"},
@@ -68,6 +72,54 @@ func TestCompileRunsOnMruby(t *testing.T) {
 	}
 	if result.ExitCode != 0 || result.Stdout != "compiled\n" {
 		t.Fatalf("mruby: exit=%d stdout=%q stderr=%q", result.ExitCode, result.Stdout, result.Stderr)
+	}
+}
+
+func TestDebugInfoLineNumbers(t *testing.T) {
+	mruby, err := toolchain.Find("mruby")
+	if err != nil {
+		t.Skip("mruby not found in PATH")
+	}
+	if err := toolchain.RequireVersion(mruby, []string{"-v"}, "mruby 4.0"); err != nil {
+		t.Skipf("mruby 4.0.0 is required: %v", err)
+	}
+
+	dir := t.TempDir()
+	source := filepath.Join(dir, "test.rb")
+	if err := os.WriteFile(source, []byte("def f\n  x = 1\n  raise \"boom\"\nend\nf\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	binary, err := mrbc.CompileFile(context.Background(), source, mrbc.Options{DebugInfo: true})
+	if err != nil {
+		t.Fatalf("CompileFile: %v", err)
+	}
+	if !bytes.Contains(binary, []byte("DBG\x00")) {
+		t.Fatal("debug binary does not contain a DBG section")
+	}
+	if !bytes.Contains(binary, []byte("LVAR")) {
+		t.Fatal("debug binary does not contain an LVAR section")
+	}
+	out := filepath.Join(dir, "test.mrb")
+	if err := os.WriteFile(out, binary, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result, err := toolchain.Run(mruby, out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ExitCode != 1 {
+		t.Fatalf("exit status = %d, want 1\nstdout=%s\nstderr=%s", result.ExitCode, result.Stdout, result.Stderr)
+	}
+	if !strings.Contains(result.Stderr, "test.rb:3:") {
+		t.Fatalf("stderr has no source line: %q", result.Stderr)
+	}
+
+	noLV, err := mrbc.CompileFile(context.Background(), source, mrbc.Options{RemoveLV: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(noLV, []byte("LVAR")) {
+		t.Error("RemoveLV binary still contains LVAR")
 	}
 }
 

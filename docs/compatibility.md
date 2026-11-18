@@ -55,7 +55,8 @@ milestones. Features are enabled as their compiler support lands.
 | `begin` / `rescue` / `ensure` / `else` | Supported |
 | `retry` / `redo` | Supported |
 | `alias` / `undef` | Supported |
-| Pattern matching (`case` / `in`) | Planned |
+| Debug information (`-g`, LVAR/DBG) | Supported |
+| Pattern matching (value, variable, capture, array, guard, pin) | Supported |
 
 Everything listed as supported is exercised by the conformance suite. The
 table is kept in sync with the implementation rather than the ambition.
@@ -82,9 +83,11 @@ The current subset is intentionally conservative:
   (for example `a[0] += 1` and `obj.attr ||= 1`).
 - Methods with post parameters are rejected.
 - `defined?` is rejected; mruby 4.0 itself compiles it as a method call.
+- Pattern matching supports value, variable, capture, array, guard, and pinned
+  patterns. Hash patterns, alternation patterns, find patterns, and array
+  rest patterns are rejected.
 - Splat rescue class lists (`rescue *ERRORS`) are rejected.
 - `alias` is limited to method aliases; global-variable aliases are rejected.
-- Debug information is not emitted, so runtime error line numbers are absent.
 
 These restrictions are checked during compilation and produce
 `file:line:column` errors.
@@ -98,7 +101,7 @@ Current explicit rejections include:
 
 - numbered block parameters and anonymous block forwarding
 - safe navigation (`&.`) and other unimplemented node kinds
-- pattern matching
+- hash, alternation, find, and array-rest patterns
 - `defined?`
 - splat rescue class lists and global-variable aliases
 - `BEGIN` / `END` blocks
@@ -128,12 +131,20 @@ emits `JMPUW` for loop jumps and relies on the VM's return unwinding.
 The compiler emits mruby's catch-handler table (rescue and ensure entries)
 directly. Splat rescue class lists are not implemented yet.
 
+### Pattern matching
+
+`case` / `in` supports value patterns (which use `===`), variable bindings,
+captures (`pattern => var`), array patterns, guards, and pinned variables or
+expressions. Array patterns call `deconstruct` and `size` and then index the
+result with `[]`, matching mruby's behavior. Unmatched patterns raise
+`NoMatchingPatternError` through `MATCHERR` when there is no `else` clause.
+
 ### Debug information
 
-The first releases do not emit the `DBG` or `LVAR` sections. Backtraces still
-work, but source line numbers and local variable names may be missing from
-runtime errors. This is a known limitation, not a semantic difference in
-successful programs.
+The compiler emits the LVAR section by default and the DBG section when `-g`
+is requested. DBG uses mruby 4.0's packed line map, so runtime backtraces and
+error messages include source file names and line numbers. `--remove-lv`
+suppresses local variable names.
 
 ### Missing standard library
 

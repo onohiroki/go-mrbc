@@ -51,6 +51,7 @@ func (c *Compiler) compileTop(program *frontend.Program) *bytecode.Irep {
 	if c.err != nil {
 		return nil
 	}
+	s.markLine(program.Pos)
 
 	sp0 := s.sp
 	dst := s.alloc(1)
@@ -88,6 +89,7 @@ func (c *Compiler) compileMethod(parent *scope, def *frontend.DefExpr) *bytecode
 	if c.err != nil {
 		return nil
 	}
+	s.markLine(def.Position())
 	aspec, ainfo := s.enterAspec()
 	s.methodInfo = &methodInfo{
 		aspec:       aspec,
@@ -129,6 +131,7 @@ func (c *Compiler) compileBlock(parent *scope, block *frontend.Block) *bytecode.
 	if c.err != nil {
 		return nil
 	}
+	s.markLine(block.Pos)
 	aspec, _ := s.enterAspec()
 	s.emit(bytecode.OpENTER, aspec)
 	c.emitOptionalDefaults(s)
@@ -161,6 +164,7 @@ func (c *Compiler) compileLambda(parent *scope, lambda *frontend.LambdaExpr) *by
 	if c.err != nil {
 		return nil
 	}
+	s.markLine(lambda.Position())
 	aspec, _ := s.enterAspec()
 	s.emit(bytecode.OpENTER, aspec)
 	c.emitOptionalDefaults(s)
@@ -193,6 +197,7 @@ func (c *Compiler) compileClassBody(parent *scope, locals []string, body []front
 	if c.err != nil {
 		return nil
 	}
+	s.markLine(pos)
 	sp0 := s.sp
 	if len(body) > 0 {
 		dst := s.alloc(1)

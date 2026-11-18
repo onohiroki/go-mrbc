@@ -364,6 +364,8 @@ M1 完了時点で「手続き型＋ブロック＋配列/ハッシュ」のマ�
   - `break`/`next`（while/until、ブロック、lambda）
   - `begin/rescue/ensure/else`、catch handler、`retry`、`redo`
   - `alias` / `undef`
+  - DBG / LVAR（`-g` で行番号、デフォルトでローカル変数名）
+  - パターンマッチ（値・変数・キャプチャ・配列・ガード・pin）
   - `raise`（例外の送出と捕捉）
   - クラス/モジュール、継承、`super`（通常・zsuper）、クラスメソッド、
     特異メソッド、`class << self`、ネストしたクラス、`A::B` 形式のクラス定義
@@ -389,13 +391,13 @@ M1 完了時点で「手続き型＋ブロック＋配列/ハッシュ」のマ�
   からの zsuper 転送は未対応
 - 多重代入の index/属性ターゲットは未対応（splat ターゲットは対応）
 - 属性・index への複合代入は未対応
-- post 引数、`defined?`、パターンマッチは未対応
+- post 引数、`defined?` は未対応
+- パターンマッチの hash / alternation / find / 配列 rest は未対応
 - `rescue *ERRORS` とグローバル変数の `alias` は未対応
-- DBG / LVAR セクションは未出力のため、実行時エラーの行番号は出ない
 
 ### 次の作業
 
-1. 適合コーパスの拡充（例外・ensure の境界ケース）
-2. M4: DBG / LVAR、パターンマッチ、`defined?`、最適化 opcode
+1. 適合コーパスの拡充（パターンマッチ・デバッグ情報の境界ケース）
+2. M4: 最適化 opcode、パターンマッチ拡張（hash/alternation/find/rest）、性能
 
 M0.5 は M0 と独立しているため、並行して進めてもよい。

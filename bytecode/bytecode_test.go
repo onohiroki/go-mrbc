@@ -230,3 +230,64 @@ func TestCatchHandlerRoundTrip(t *testing.T) {
 		t.Fatalf("catch mismatch: %#v != %#v", got.Catch, top.Catch)
 	}
 }
+
+func TestDebugAndLVARSections(t *testing.T) {
+	code, _ := EncodeInstruction(nil, OpRETNIL)
+	childCode, _ := EncodeInstruction(nil, OpRETNIL)
+	top := &Irep{
+		Nlocals:    3,
+		Nregs:      3,
+		Code:       code,
+		Syms:       []string{"x"},
+		LocalNames: []string{"", "x", ""},
+		Filename:   "test.rb",
+		Lines:      []DebugLine{{Offset: 0, Line: 1}, {Offset: 2, Line: 3}},
+		Reps: []*Irep{{
+			Nlocals:    2,
+			Nregs:      2,
+			Code:       childCode,
+			LocalNames: []string{"", "y"},
+			Filename:   "test.rb",
+			Lines:      []DebugLine{{Offset: 0, Line: 5}},
+		}},
+	}
+
+	binary, err := DumpBinaryWithOptions(top, DumpOptions{DebugInfo: true})
+	if err != nil {
+		t.Fatalf("DumpBinaryWithOptions: %v", err)
+	}
+	if !bytes.Contains(binary, []byte("LVAR")) {
+		t.Error("binary does not contain an LVAR section")
+	}
+	if !bytes.Contains(binary, []byte("DBG\x00")) {
+		t.Error("binary does not contain a DBG section")
+	}
+	got, err := ReadBinary(binary)
+	if err != nil {
+		t.Fatalf("ReadBinary: %v", err)
+	}
+	if !reflect.DeepEqual(got.LocalNames, top.LocalNames) {
+		t.Errorf("local names = %#v, want %#v", got.LocalNames, top.LocalNames)
+	}
+	if got.Filename != top.Filename || !reflect.DeepEqual(got.Lines, top.Lines) {
+		t.Errorf("debug info = %q %#v, want %q %#v", got.Filename, got.Lines, top.Filename, top.Lines)
+	}
+	if len(got.Reps) != 1 || !reflect.DeepEqual(got.Reps[0].Lines, top.Reps[0].Lines) {
+		t.Errorf("child debug info mismatch: %#v", got.Reps)
+	}
+
+	noLV, err := DumpBinaryWithOptions(top, DumpOptions{DebugInfo: true, RemoveLV: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(noLV, []byte("LVAR")) {
+		t.Error("binary contains LVAR despite RemoveLV")
+	}
+	plain, err := DumpBinary(top)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(plain, []byte("DBG\x00")) {
+		t.Error("default dump unexpectedly contains DBG")
+	}
+}

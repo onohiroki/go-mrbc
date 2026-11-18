@@ -301,6 +301,28 @@ func dumpExpr(w io.Writer, expr Expr, depth int) error {
 			fmt.Fprintf(w, "%s  else\n", prefix)
 			return dumpExpr(w, e.Else, depth+2)
 		}
+	case *CaseMatchExpr:
+		fmt.Fprintf(w, "%scase-match\n", prefix)
+		fmt.Fprintf(w, "%s  subject\n", prefix)
+		if err := dumpExpr(w, e.Subject, depth+2); err != nil {
+			return err
+		}
+		for _, in := range e.Ins {
+			fmt.Fprintf(w, "%s  in %s\n", prefix, patternDescription(in.Pattern))
+			if in.Guard != nil {
+				fmt.Fprintf(w, "%s    guard\n", prefix)
+				if err := dumpExpr(w, in.Guard, depth+3); err != nil {
+					return err
+				}
+			}
+			if err := dumpBody(w, in.Body, depth+3); err != nil {
+				return err
+			}
+		}
+		if e.HasElse {
+			fmt.Fprintf(w, "%s  else\n", prefix)
+			return dumpBody(w, e.Else, depth+2)
+		}
 	case *DefExpr:
 		fmt.Fprintf(w, "%sdef %s params=%v locals=%v\n", prefix, e.Name, paramNames(e.Params), e.Locals)
 		return dumpBody(w, e.Body, depth+1)
@@ -345,6 +367,23 @@ func dumpExpr(w io.Writer, expr Expr, depth int) error {
 		fmt.Fprintf(w, "%sunknown %T\n", prefix, expr)
 	}
 	return nil
+}
+
+func patternDescription(pattern Pattern) string {
+	switch p := pattern.(type) {
+	case *ValuePattern:
+		return "value"
+	case *EqualPattern:
+		return "pin"
+	case *BindPattern:
+		return "bind " + p.Target.Name
+	case *CapturePattern:
+		return "capture " + p.Target.Name + " (" + patternDescription(p.Value) + ")"
+	case *ArrayPattern:
+		return fmt.Sprintf("array[%d]", len(p.Elements))
+	default:
+		return fmt.Sprintf("%T", pattern)
+	}
 }
 
 func paramNames(params []Param) []string {

@@ -3,6 +3,7 @@ package compiler
 import (
 	"fmt"
 	"math"
+	"strings"
 
 	"github.com/onohiroki/go-mrbc/bytecode"
 	"github.com/onohiroki/go-mrbc/internal/frontend"
@@ -67,6 +68,8 @@ type scope struct {
 	rescue     *rescueContext
 	redoTarget label
 	hasRedo    bool
+
+	lines []bytecode.DebugLine
 }
 
 type rescueContext struct {
@@ -248,6 +251,25 @@ func (s *scope) emitMove(dst, src int) {
 	}
 }
 
+func (s *scope) markLine(pos frontend.Position) {
+	if s.c.err != nil || pos.Line <= 0 {
+		return
+	}
+	line := int32(pos.Line)
+	offset := int32(len(s.asm.code))
+	if len(s.lines) > 0 {
+		last := s.lines[len(s.lines)-1]
+		if last.Line == line {
+			return
+		}
+		if last.Offset == offset {
+			s.lines[len(s.lines)-1].Line = line
+			return
+		}
+	}
+	s.lines = append(s.lines, bytecode.DebugLine{Offset: offset, Line: line})
+}
+
 func (s *scope) sym(name string) uint32 {
 	return uint32(s.irep.SymbolIndex(name))
 }
@@ -289,6 +311,15 @@ func (s *scope) finish() error {
 	s.irep.Code = s.asm.code
 	s.irep.Nlocals = uint16(s.nlocals)
 	s.irep.Nregs = uint16(nregs)
+	s.irep.Filename = s.c.source.File
+	s.irep.Lines = s.lines
+	names := make([]string, s.nlocals)
+	for name, slot := range s.locals {
+		if slot > 0 && slot < len(names) && !strings.HasPrefix(name, "__gomrbc_for_") {
+			names[slot] = name
+		}
+	}
+	s.irep.LocalNames = names
 	return nil
 }
 

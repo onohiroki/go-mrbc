@@ -60,6 +60,12 @@ const (
 // CatchHandlerSize is the encoded size of one catch handler.
 const CatchHandlerSize = 13
 
+// DebugLine records the source line at an instruction offset.
+type DebugLine struct {
+	Offset int32
+	Line   int32
+}
+
 // Irep is one mruby instruction representation: an instruction sequence and
 // its associated literals, symbols, and child ireps.
 type Irep struct {
@@ -70,6 +76,13 @@ type Irep struct {
 	Pool    []PoolEntry
 	Syms    []string
 	Reps    []*Irep
+
+	// LocalNames holds local variable names indexed by register. Index 0
+	// (self) is unused and empty entries denote hidden slots.
+	LocalNames []string
+	// Filename and Lines carry optional debug information.
+	Filename string
+	Lines    []DebugLine
 }
 
 // AddChild appends a child irep and returns its index.

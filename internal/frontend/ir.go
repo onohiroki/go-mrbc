@@ -363,4 +363,60 @@ type UndefExpr struct {
 	Names []string
 }
 
+type CaseMatchExpr struct {
+	exprBase
+	Subject Expr
+	Ins     []InClause
+	Else    []Expr
+	HasElse bool
+}
+
+type InClause struct {
+	Pos     Position
+	Pattern Pattern
+	Guard   Expr
+	Body    []Expr
+}
+
+type Pattern interface {
+	patternNode()
+	Position() Position
+}
+
+type patternBase struct {
+	Pos Position
+}
+
+func (p patternBase) patternNode()       {}
+func (p patternBase) Position() Position { return p.Pos }
+
+type ValuePattern struct {
+	patternBase
+	Value Expr
+}
+
+type EqualPattern struct {
+	patternBase
+	Value Expr
+}
+
+type BindPattern struct {
+	patternBase
+	Target MultiTarget
+}
+
+type CapturePattern struct {
+	patternBase
+	Value  Pattern
+	Target MultiTarget
+}
+
+type ArrayPattern struct {
+	patternBase
+	Constant Expr
+	Elements []Pattern
+}
+
+func pattern(pos Position) patternBase { return patternBase{Pos: pos} }
+
 func base(pos Position) exprBase { return exprBase{Pos: pos} }

@@ -130,6 +130,29 @@ Control flow that leaves a protected region (`break`, `next`, `retry`,
 `redo`) is emitted with `JMPUW`, which unwinds ensure handlers on the way.
 `return` and non-local block returns rely on the VM's own return unwinding.
 
+### Pattern matching
+
+`case` / `in` evaluates its subject once and tests each clause's pattern.
+Value patterns test `pattern === subject`; variable and capture patterns bind
+locals; array patterns call `deconstruct`, check `size`, and index with `[]`
+before recursing into nested patterns. Guards are compiled as ordinary
+conditions after bindings are established. With no `else`, a failed match ends
+with `LOADFALSE` and `MATCHERR`, raising `NoMatchingPatternError` exactly like
+mruby.
+
+## Debug information
+
+The compiler records a source line for each emitted instruction offset. At
+dump time it emits:
+
+- an `LVAR` section with local variable names per register (unless
+  `--remove-lv` is used);
+- a `DBG` section with a packed line map when `-g` is requested.
+
+mruby 4.0 reads the packed line map when building backtraces, so runtime errors
+report the original file and line. Child ireps, including method, block,
+lambda, and class bodies, carry their own line maps.
+
 ## Register machine
 
 mruby bytecode is a register machine. Expression evaluation uses a stack of

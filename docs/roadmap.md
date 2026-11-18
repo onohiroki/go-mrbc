@@ -22,7 +22,8 @@ English summary.
 - [x] `for` loops
 - [x] `raise`, `begin` / `rescue` / `ensure`, `retry`, `redo`
 - [x] `alias` / `undef`
-- [ ] Debug information (`-g`, LVAR/DBG)
+- [x] Debug information (`-g`, LVAR/DBG)
+- [x] Pattern matching (value, variable, capture, array, guard, pin)
 - [ ] Optimized opcodes
 
 ## M0 - Parser integration
@@ -70,15 +71,15 @@ restrictions.
 - `alias` / `undef`.
 - Debug information and local variable sections.
 
-Status: exceptions, unwinding, `retry`/`redo`, `alias`, and `undef` are
-implemented. Debug information remains planned.
+Status: exceptions, unwinding, `retry`/`redo`, `alias`, `undef`, debug
+information, and a practical pattern-matching subset are implemented.
 
 ## M4 - Expansion and optimization
 
 - Optimized opcodes for arithmetic, comparison, and calls.
-- Pattern matching.
+- Pattern matching extensions (hash, alternation, find, rest patterns).
 - `defined?`.
-- Debug information and performance improvements.
+- Performance improvements.
 
 ## Parallel project: pure-Go mruby VM
 

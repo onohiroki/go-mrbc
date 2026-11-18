@@ -492,6 +492,8 @@ func (l *lowerer) lowerExpr(node parser.Node) (Expr, error) {
 
 	case *parser.CaseNode:
 		return l.lowerCase(n)
+	case *parser.CaseMatchNode:
+		return l.lowerCaseMatch(n)
 	case *parser.ForNode:
 		return l.lowerFor(n)
 	case *parser.DefNode:
@@ -774,6 +776,159 @@ func (l *lowerer) lowerCase(n *parser.CaseNode) (Expr, error) {
 		elseExpr = statementsExpr(body, l.pos(n.ElseClause))
 	}
 	return &CaseExpr{exprBase: base(pos), Subject: subject, Whens: whens, Else: elseExpr}, nil
+}
+
+func (l *lowerer) lowerCaseMatch(n *parser.CaseMatchNode) (Expr, error) {
+	if n.Predicate == nil {
+		return nil, l.errorf(n, "case/in without a subject is not supported")
+	}
+	subject, err := l.lowerExpr(n.Predicate)
+	if err != nil {
+		return nil, err
+	}
+	ins := make([]InClause, 0, len(n.Conditions))
+	for _, condition := range n.Conditions {
+		inNode, ok := condition.(*parser.InNode)
+		if !ok {
+			return nil, l.unsupported(condition)
+		}
+		clause := InClause{Pos: l.pos(inNode)}
+		patternNode := inNode.Pattern
+		switch guard := patternNode.(type) {
+		case *parser.IfNode:
+			if guard.Statements == nil || len(guard.Statements.Body) == 0 {
+				return nil, l.errorf(guard, "unsupported pattern guard")
+			}
+			clause.Guard, err = l.lowerExpr(guard.Predicate)
+			if err != nil {
+				return nil, err
+			}
+			patternNode = guard.Statements.Body[0]
+		case *parser.UnlessNode:
+			if guard.Statements == nil || len(guard.Statements.Body) == 0 {
+				return nil, l.errorf(guard, "unsupported pattern guard")
+			}
+			condition, err := l.lowerExpr(guard.Predicate)
+			if err != nil {
+				return nil, err
+			}
+			clause.Guard = &NotExpr{exprBase: base(l.pos(guard)), Value: condition}
+			patternNode = guard.Statements.Body[0]
+		}
+		clause.Pattern, err = l.lowerPattern(patternNode)
+		if err != nil {
+			return nil, err
+		}
+		clause.Body, err = l.lowerStatements(inNode.Statements)
+		if err != nil {
+			return nil, err
+		}
+		ins = append(ins, clause)
+	}
+	var elseBody []Expr
+	hasElse := n.ElseClause != nil
+	if hasElse {
+		elseBody, err = l.lowerStatements(n.ElseClause.Statements)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &CaseMatchExpr{
+		exprBase: base(l.pos(n)),
+		Subject:  subject,
+		Ins:      ins,
+		Else:     elseBody,
+		HasElse:  hasElse,
+	}, nil
+}
+
+func (l *lowerer) lowerPattern(node parser.Node) (Pattern, error) {
+	pos := l.pos(node)
+	switch n := node.(type) {
+	case *parser.IntegerNode, *parser.FloatNode, *parser.StringNode,
+		*parser.SymbolNode, *parser.NilNode, *parser.TrueNode,
+		*parser.FalseNode, *parser.SelfNode, *parser.ConstantReadNode,
+		*parser.ConstantPathNode, *parser.RangeNode:
+		value, err := l.lowerExpr(node)
+		if err != nil {
+			return nil, err
+		}
+		return &ValuePattern{patternBase: pattern(pos), Value: value}, nil
+
+	case *parser.LocalVariableTargetNode:
+		return &BindPattern{
+			patternBase: pattern(pos),
+			Target:      MultiTarget{Pos: pos, Kind: TargetLocal, Name: n.Name, Depth: int(n.Depth)},
+		}, nil
+	case *parser.LocalVariableReadNode:
+		return &BindPattern{
+			patternBase: pattern(pos),
+			Target:      MultiTarget{Pos: pos, Kind: TargetLocal, Name: n.Name, Depth: int(n.Depth)},
+		}, nil
+
+	case *parser.CapturePatternNode:
+		value, err := l.lowerPattern(n.Value)
+		if err != nil {
+			return nil, err
+		}
+		target, err := l.lowerMultiTarget(n.Target)
+		if err != nil {
+			return nil, err
+		}
+		return &CapturePattern{patternBase: pattern(pos), Value: value, Target: target}, nil
+
+	case *parser.ArrayPatternNode:
+		if n.Rest != nil {
+			return nil, l.errorf(n.Rest, "array pattern rest is not supported yet")
+		}
+		var constant Expr
+		if n.Constant != nil {
+			var err error
+			constant, err = l.lowerExpr(n.Constant)
+			if err != nil {
+				return nil, err
+			}
+		}
+		elements := make([]Pattern, 0, len(n.Requireds)+len(n.Posts))
+		for _, element := range n.Requireds {
+			pattern, err := l.lowerPattern(element)
+			if err != nil {
+				return nil, err
+			}
+			elements = append(elements, pattern)
+		}
+		for _, element := range n.Posts {
+			pattern, err := l.lowerPattern(element)
+			if err != nil {
+				return nil, err
+			}
+			elements = append(elements, pattern)
+		}
+		return &ArrayPattern{patternBase: pattern(pos), Constant: constant, Elements: elements}, nil
+
+	case *parser.PinnedVariableNode:
+		value, err := l.lowerExpr(n.Variable)
+		if err != nil {
+			return nil, err
+		}
+		return &EqualPattern{patternBase: pattern(pos), Value: value}, nil
+	case *parser.PinnedExpressionNode:
+		value, err := l.lowerExpr(n.Expression)
+		if err != nil {
+			return nil, err
+		}
+		return &EqualPattern{patternBase: pattern(pos), Value: value}, nil
+	case *parser.ImplicitNode:
+		return l.lowerPattern(n.Value)
+
+	case *parser.HashPatternNode:
+		return nil, l.errorf(n, "hash patterns are not supported yet")
+	case *parser.FindPatternNode:
+		return nil, l.errorf(n, "find patterns are not supported yet")
+	case *parser.AlternationPatternNode:
+		return nil, l.errorf(n, "alternation patterns are not supported yet")
+	}
+	return nil, l.errorf(node, "unsupported pattern: %s", nodeName(node))
 }
 
 func (l *lowerer) lowerDef(n *parser.DefNode) (Expr, error) {

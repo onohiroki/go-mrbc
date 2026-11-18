@@ -13,10 +13,11 @@ project and is not part of this repository.
 ## Status
 
 This project is under active development. The RITE writer, opcode codec, Prism
-lowering, and the first three practical macro milestones are implemented and
-tested against mruby 4.0.0: scalars, control flow, methods, blocks, classes,
-modules, inheritance, `super`, instance/class variables, constants, keyword
-arguments, splats, lambdas, multiple assignment, exceptions, and `raise`.
+lowering, and the current macro-language milestones are implemented and tested
+against mruby 4.0.0: scalars, control flow, methods, blocks, classes, modules,
+inheritance, `super`, instance/class variables, constants, keyword arguments,
+splats, lambdas, multiple assignment, exceptions, pattern matching, debug
+information, and `raise`.
 
 | Component | Status |
 | --- | --- |
@@ -30,7 +31,8 @@ arguments, splats, lambdas, multiple assignment, exceptions, and `raise`.
 | Multiple assignment | Implemented |
 | `begin` / `rescue` / `ensure` / `retry` | Implemented |
 | `alias` / `undef` | Implemented |
-| Debug information (`-g`, LVAR/DBG) | Not implemented |
+| Pattern matching (`case` / `in`, subset) | Implemented |
+| Debug information (`-g`, LVAR/DBG) | Implemented |
 | Peephole optimizer | Not planned initially |
 
 See [Compatibility](docs/compatibility.md) for the exact supported subset and
@@ -106,9 +108,11 @@ gomrbc [options] file.rb
 
   -o FILE        write bytecode to FILE (default: <source>.mrb)
   -c             check syntax only
+  -g, --debug    emit debug information (source lines)
   -v, --verbose  print the generated instruction sequence
   --dump-ast     print the Prism AST as JSON
   --dump-ir      print the lowered intermediate representation
+  --remove-lv    omit local variable information
   --version      print version information
 ```
 

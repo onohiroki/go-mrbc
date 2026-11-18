@@ -66,6 +66,13 @@ Invalid or unsupported programs are covered by unit tests in
 containing the source location and reason, and that no output file is written
 (the compile API returns an error before serialization).
 
+## Debug information tests
+
+`mrbc/compile_test.go` compiles a failing program with `Options{DebugInfo: true}`
+and checks that mruby reports the original `file:line`. The bytecode tests
+round-trip `LVAR` and `DBG` sections and verify that `--remove-lv` suppresses
+local variable names.
+
 ## Fuzzing
 
 Once the core compiler is stable, a small generator will produce random

@@ -123,6 +123,57 @@ Child ireps are serialized immediately after the parent's symbol table, in the
 order referenced by `BLOCK`, `LAMBDA`, `METHOD`, `EXEC`, `TDEF`, `SDEF`, and
 related instructions. `rlen` gives their count.
 
+## DBG section
+
+The optional `DBG` section carries source line information. It is emitted when
+the compiler is asked for debug information (`gomrbc -g`).
+
+```
+section identifier : "DBG\0"
+section size       : uint32
+filename count     : uint16
+filenames          : count * (uint16 length, bytes)
+debug records      : one per irep, in preorder
+```
+
+A debug record is:
+
+| Field | Size | Notes |
+| --- | --- | --- |
+| record size | 4 | includes this field |
+| file count | 2 | number of file entries |
+| start position | 4 | instruction offset where the file starts |
+| filename index | 2 | index into the filename table |
+| line entry count | 4 | bytes of line data |
+| line type | 1 | 2 = packed map |
+| line data | variable | packed varint pairs |
+
+The compiler emits one file entry per irep with `start position = 0`. The
+packed map is a sequence of varint pairs `(pc delta, line delta)` starting at
+`pc = 0, line = 0`; values accumulate. mruby resolves a program counter by
+walking the pairs until the accumulated position exceeds the pc. This is the
+format mruby 4.0's `mrb_debug_get_line` reads.
+
+## LVAR section
+
+The optional `LVAR` section stores local variable names. It is emitted unless
+`--remove-lv` is used.
+
+```
+section identifier : "LVAR"
+section size       : uint32
+symbol count       : uint32
+symbols            : count * (uint16 length, bytes)
+records            : one per irep, in preorder
+```
+
+Each irep contributes `nlocals - 1` uint16 entries (registers `R1` through
+`R[nlocals-1]`, excluding `R0`). An entry is an index into the symbol table, or
+`0xFFFF` when the register has no name (for example a hidden block or keyword
+slot).
+
+Sections are written in the order `IREP`, `DBG`, `LVAR`, `END`.
+
 ## Instructions
 
 An instruction is a one-byte opcode followed by its operands. Operand widths

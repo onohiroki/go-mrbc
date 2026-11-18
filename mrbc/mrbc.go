@@ -56,12 +56,20 @@ func CompileFile(ctx context.Context, path string, opts Options) ([]byte, error)
 	if err != nil {
 		return nil, err
 	}
-	return Dump(irep)
+	return DumpWithOptions(irep, bytecode.DumpOptions{
+		DebugInfo: opts.DebugInfo,
+		RemoveLV:  opts.RemoveLV,
+	})
 }
 
-// Dump serializes an irep as a RITE 04.00 binary.
+// Dump serializes an irep as a RITE 04.00 binary with default options.
 func Dump(irep *bytecode.Irep) ([]byte, error) {
-	binary, err := bytecode.DumpBinary(irep)
+	return DumpWithOptions(irep, bytecode.DumpOptions{})
+}
+
+// DumpWithOptions serializes an irep as a RITE 04.00 binary.
+func DumpWithOptions(irep *bytecode.Irep, opts bytecode.DumpOptions) ([]byte, error) {
+	binary, err := bytecode.DumpBinaryWithOptions(irep, opts)
 	if err != nil {
 		return nil, fmt.Errorf("dump bytecode: %w", err)
 	}
