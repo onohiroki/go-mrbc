@@ -1,0 +1,26 @@
+go-mrbc
+Copyright (c) 2026 go-mrbc contributors
+
+This product includes knowledge derived from the mruby project.
+
+mruby
+Copyright (c) 2010-2026 mruby developers
+Licensed under the MIT License.
+https://github.com/mruby/mruby
+
+The RITE binary format, opcode definitions, argument specifications, and
+bytecode semantics implemented by this project follow mruby 4.0.0.
+
+This product uses the following Go module at build time:
+
+go-ruby-prism
+Copyright (c) 2024-present Daniel Gatis
+Licensed under the MIT License.
+https://github.com/danielgatis/go-ruby-prism
+
+go-ruby-prism embeds Prism, the Ruby parser:
+
+Prism
+Copyright (c) 2023-2026 Ruby contributors
+Licensed under the MIT License.
+https://github.com/ruby/prism

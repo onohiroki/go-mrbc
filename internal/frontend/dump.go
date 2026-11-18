@@ -1,0 +1,234 @@
+package frontend
+
+import (
+	"fmt"
+	"io"
+	"strings"
+)
+
+// Dump writes a human-readable representation of the lowered IR.
+func Dump(w io.Writer, program *Program) error {
+	if program == nil {
+		return fmt.Errorf("frontend: nil program")
+	}
+	fmt.Fprintf(w, "program locals=%v\n", program.Locals)
+	return dumpBody(w, program.Body, 1)
+}
+
+func dumpBody(w io.Writer, body []Expr, depth int) error {
+	for _, expr := range body {
+		if err := dumpExpr(w, expr, depth); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func indent(depth int) string {
+	return strings.Repeat("  ", depth)
+}
+
+func dumpExpr(w io.Writer, expr Expr, depth int) error {
+	if expr == nil {
+		fmt.Fprintf(w, "%s<nil>\n", indent(depth))
+		return nil
+	}
+	prefix := indent(depth)
+	switch e := expr.(type) {
+	case *Statements:
+		fmt.Fprintf(w, "%sstatements\n", prefix)
+		return dumpBody(w, e.Body, depth+1)
+	case *NilLiteral:
+		fmt.Fprintf(w, "%snil\n", prefix)
+	case *TrueLiteral:
+		fmt.Fprintf(w, "%strue\n", prefix)
+	case *FalseLiteral:
+		fmt.Fprintf(w, "%sfalse\n", prefix)
+	case *SelfExpr:
+		fmt.Fprintf(w, "%sself\n", prefix)
+	case *IntegerLiteral:
+		fmt.Fprintf(w, "%sinteger %d\n", prefix, e.Value)
+	case *FloatLiteral:
+		fmt.Fprintf(w, "%sfloat %v\n", prefix, e.Value)
+	case *StringLiteral:
+		fmt.Fprintf(w, "%sstring %q\n", prefix, e.Value)
+	case *SymbolLiteral:
+		fmt.Fprintf(w, "%ssymbol :%s\n", prefix, e.Value)
+	case *InterpolatedString:
+		fmt.Fprintf(w, "%sinterpolated-string\n", prefix)
+		for _, part := range e.Parts {
+			if err := dumpExpr(w, part, depth+1); err != nil {
+				return err
+			}
+		}
+	case *LocalRead:
+		fmt.Fprintf(w, "%slvar %s depth=%d\n", prefix, e.Name, e.Depth)
+	case *LocalWrite:
+		fmt.Fprintf(w, "%slvar-write %s depth=%d\n", prefix, e.Name, e.Depth)
+		return dumpExpr(w, e.Value, depth+1)
+	case *GlobalRead:
+		fmt.Fprintf(w, "%sgvar %s\n", prefix, e.Name)
+	case *GlobalWrite:
+		fmt.Fprintf(w, "%sgvar-write %s\n", prefix, e.Name)
+		return dumpExpr(w, e.Value, depth+1)
+	case *ConstantRead:
+		fmt.Fprintf(w, "%sconst %s\n", prefix, e.Name)
+	case *ArrayLiteral:
+		fmt.Fprintf(w, "%sarray\n", prefix)
+		for _, element := range e.Elements {
+			if err := dumpExpr(w, element, depth+1); err != nil {
+				return err
+			}
+		}
+	case *HashLiteral:
+		fmt.Fprintf(w, "%shash\n", prefix)
+		for _, pair := range e.Pairs {
+			fmt.Fprintf(w, "%s  key\n", prefix)
+			if err := dumpExpr(w, pair.Key, depth+2); err != nil {
+				return err
+			}
+			fmt.Fprintf(w, "%s  value\n", prefix)
+			if err := dumpExpr(w, pair.Value, depth+2); err != nil {
+				return err
+			}
+		}
+	case *RangeLiteral:
+		exclusive := ".."
+		if e.Exclusive {
+			exclusive = "..."
+		}
+		fmt.Fprintf(w, "%srange %s\n", prefix, exclusive)
+		if err := dumpExpr(w, e.Low, depth+1); err != nil {
+			return err
+		}
+		return dumpExpr(w, e.High, depth+1)
+	case *Call:
+		receiver := "self"
+		if e.Receiver != nil {
+			receiver = "explicit"
+		}
+		fmt.Fprintf(w, "%scall %s (%s) nargs=%d\n", prefix, e.Name, receiver, len(e.Args))
+		if e.Receiver != nil {
+			if err := dumpExpr(w, e.Receiver, depth+1); err != nil {
+				return err
+			}
+		}
+		for _, arg := range e.Args {
+			if err := dumpExpr(w, arg, depth+1); err != nil {
+				return err
+			}
+		}
+		if e.Block != nil {
+			fmt.Fprintf(w, "%s  block params=%v locals=%v\n", prefix, paramNames(e.Block.Params), e.Block.Locals)
+			if err := dumpBody(w, e.Block.Body, depth+2); err != nil {
+				return err
+			}
+		}
+	case *IfExpr:
+		fmt.Fprintf(w, "%sif\n", prefix)
+		fmt.Fprintf(w, "%s  cond\n", prefix)
+		if err := dumpExpr(w, e.Cond, depth+2); err != nil {
+			return err
+		}
+		fmt.Fprintf(w, "%s  then\n", prefix)
+		if err := dumpExpr(w, e.Then, depth+2); err != nil {
+			return err
+		}
+		if e.Else != nil {
+			fmt.Fprintf(w, "%s  else\n", prefix)
+			return dumpExpr(w, e.Else, depth+2)
+		}
+	case *WhileExpr:
+		fmt.Fprintf(w, "%swhile\n", prefix)
+		fmt.Fprintf(w, "%s  cond\n", prefix)
+		if err := dumpExpr(w, e.Cond, depth+2); err != nil {
+			return err
+		}
+		fmt.Fprintf(w, "%s  body\n", prefix)
+		return dumpExpr(w, e.Body, depth+2)
+	case *CaseExpr:
+		fmt.Fprintf(w, "%scase\n", prefix)
+		if e.Subject != nil {
+			fmt.Fprintf(w, "%s  subject\n", prefix)
+			if err := dumpExpr(w, e.Subject, depth+2); err != nil {
+				return err
+			}
+		}
+		for _, when := range e.Whens {
+			fmt.Fprintf(w, "%s  when\n", prefix)
+			for _, cond := range when.Conds {
+				if err := dumpExpr(w, cond, depth+2); err != nil {
+					return err
+				}
+			}
+			fmt.Fprintf(w, "%s  then\n", prefix)
+			if err := dumpBody(w, when.Body, depth+2); err != nil {
+				return err
+			}
+		}
+		if e.Else != nil {
+			fmt.Fprintf(w, "%s  else\n", prefix)
+			return dumpExpr(w, e.Else, depth+2)
+		}
+	case *DefExpr:
+		fmt.Fprintf(w, "%sdef %s params=%v locals=%v\n", prefix, e.Name, paramNames(e.Params), e.Locals)
+		return dumpBody(w, e.Body, depth+1)
+	case *ReturnExpr:
+		fmt.Fprintf(w, "%sreturn\n", prefix)
+		if e.Value != nil {
+			return dumpExpr(w, e.Value, depth+1)
+		}
+	case *BreakExpr:
+		fmt.Fprintf(w, "%sbreak\n", prefix)
+		if e.Value != nil {
+			return dumpExpr(w, e.Value, depth+1)
+		}
+	case *NextExpr:
+		fmt.Fprintf(w, "%snext\n", prefix)
+		if e.Value != nil {
+			return dumpExpr(w, e.Value, depth+1)
+		}
+	case *YieldExpr:
+		fmt.Fprintf(w, "%syield nargs=%d\n", prefix, len(e.Args))
+		for _, arg := range e.Args {
+			if err := dumpExpr(w, arg, depth+1); err != nil {
+				return err
+			}
+		}
+	case *AndExpr:
+		fmt.Fprintf(w, "%sand\n", prefix)
+		if err := dumpExpr(w, e.Left, depth+1); err != nil {
+			return err
+		}
+		return dumpExpr(w, e.Right, depth+1)
+	case *OrExpr:
+		fmt.Fprintf(w, "%sor\n", prefix)
+		if err := dumpExpr(w, e.Left, depth+1); err != nil {
+			return err
+		}
+		return dumpExpr(w, e.Right, depth+1)
+	case *NotExpr:
+		fmt.Fprintf(w, "%snot\n", prefix)
+		return dumpExpr(w, e.Value, depth+1)
+	default:
+		fmt.Fprintf(w, "%sunknown %T\n", prefix, expr)
+	}
+	return nil
+}
+
+func paramNames(params []Param) []string {
+	names := make([]string, len(params))
+	for i, param := range params {
+		prefix := ""
+		switch param.Kind {
+		case ParamOptional:
+			prefix = "?"
+		case ParamRest:
+			prefix = "*"
+		case ParamBlock:
+			prefix = "&"
+		}
+		names[i] = prefix + param.Name
+	}
+	return names
+}

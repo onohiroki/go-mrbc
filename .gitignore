@@ -1,0 +1,6 @@
+mruby
+gomrbc
+*.mrb
+*.test
+dist/
+.DS_Store
