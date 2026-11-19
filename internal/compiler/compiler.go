@@ -110,6 +110,7 @@ func (c *Compiler) compileMethod(parent *scope, def *frontend.DefExpr) *bytecode
 	c.emitOptionalDefaults(s)
 	c.emitKeywordInit(s)
 	c.emitParamDestructure(s)
+	c.emitBlockParamCopy(s)
 
 	sp0 := s.sp
 	if len(def.Body) == 0 {
@@ -139,6 +140,7 @@ func (c *Compiler) compileBlock(parent *scope, block *frontend.Block) *bytecode.
 	c.emitOptionalDefaults(s)
 	c.emitKeywordInit(s)
 	c.emitParamDestructure(s)
+	c.emitBlockParamCopy(s)
 
 	sp0 := s.sp
 	redoLabel := s.asm.newLabel()
@@ -173,6 +175,7 @@ func (c *Compiler) compileLambda(parent *scope, lambda *frontend.LambdaExpr) *by
 	c.emitOptionalDefaults(s)
 	c.emitKeywordInit(s)
 	c.emitParamDestructure(s)
+	c.emitBlockParamCopy(s)
 
 	sp0 := s.sp
 	redoLabel := s.asm.newLabel()
@@ -203,12 +206,10 @@ func (c *Compiler) compileClassBody(parent *scope, locals []string, body []front
 	}
 	s.markLine(pos)
 	sp0 := s.sp
-	if len(body) > 0 {
-		dst := s.alloc(1)
-		c.compileBody(s, body, dst)
-		s.sp = sp0
-	}
-	s.emit(bytecode.OpRETURN, 0)
+	dst := s.alloc(1)
+	c.compileBody(s, body, dst)
+	s.sp = sp0
+	s.emit(bytecode.OpRETURN, uint32(dst))
 
 	if err := s.finish(); err != nil {
 		c.fail(pos, "%v", err)
@@ -254,6 +255,22 @@ func (c *Compiler) emitOptionalDefaults(s *scope) {
 		s.sp = sp0
 	}
 	s.asm.bind(end)
+}
+
+func (c *Compiler) emitBlockParamCopy(s *scope) {
+	if s.blockSlot < 0 {
+		return
+	}
+	for _, param := range s.params {
+		if param.Kind != frontend.ParamBlock || param.Name == "" {
+			continue
+		}
+		slot, ok := s.locals[param.Name]
+		if !ok || slot == s.blockSlot {
+			continue
+		}
+		s.emitMove(slot, s.blockSlot)
+	}
 }
 
 func (c *Compiler) emitParamDestructure(s *scope) {

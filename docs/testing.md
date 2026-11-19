@@ -60,7 +60,26 @@ go run ./cmd/compat mruby/test mruby/mrbgems
 
 The current snapshot is recorded in
 [compatibility-report.md](compatibility-report.md). The check is compile-only;
-runtime behavior is covered by the conformance suite.
+runtime behavior is covered by the conformance suite and the runtime harness
+below.
+
+## Runtime parity over mruby's test tree
+
+`cmd/runtimecompat` wraps each mruby test file with `test/assert.rb`, compiles
+the wrapper with both `mrbc` and `go-mrbc`, runs both binaries, and compares
+stdout, stderr, and exit status. Tests that run longer than the timeout are
+compared by their partial output; when both implementations time out at the
+same point, that counts as a match.
+
+```sh
+export RBENV_VERSION=mruby-4.0.0
+go run ./cmd/runtimecompat mruby/test/t mruby/mrbgems
+```
+
+Use `-v` for per-file results and `-json report.json` for a machine-readable
+report. The wrapper supplies `t_print` and appends a deterministic summary
+line, so the test files can run under a plain `mruby` binary instead of
+`mrbtest`.
 
 ## Running
 

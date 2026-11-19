@@ -178,10 +178,14 @@ func (s *scope) initLocals(locals []string) error {
 			positional++
 		case frontend.ParamRest:
 			slot := next
-			if param.Name != "" {
-				if err := bind(param.Name, slot); err != nil {
-					return err
-				}
+			name := param.Name
+			if name == "" {
+				// mruby names an unnamed rest parameter "*" in the LVAR
+				// section so that Proc#parameters can report it.
+				name = "*"
+			}
+			if err := bind(name, slot); err != nil {
+				return err
 			}
 			s.restSlot = slot
 			next++
@@ -201,20 +205,23 @@ func (s *scope) initLocals(locals []string) error {
 			keywordSlot := 1 + positional
 			s.keywordSlot = keywordSlot
 			next = keywordSlot + 1
-			if keywordRest != nil {
-				if keywordRest.Name != "" {
-					if err := bind(keywordRest.Name, keywordSlot); err != nil {
-						return err
-					}
-				}
+			keywordName := "**"
+			if keywordRest != nil && keywordRest.Name != "" {
+				keywordName = keywordRest.Name
+			}
+			if err := bind(keywordName, keywordSlot); err != nil {
+				return err
 			}
 			blockSlot := keywordSlot + 1
 			s.blockSlot = blockSlot
 			next = blockSlot + 1
 			if blockParam != nil && blockParam.Name != "" {
-				if err := bind(blockParam.Name, blockSlot); err != nil {
+				// mruby keeps the internal block in its own slot and copies
+				// it into the named parameter's slot.
+				if err := bind(blockParam.Name, blockSlot+1); err != nil {
 					return err
 				}
+				next = blockSlot + 2
 			}
 			for i := range s.params {
 				param := &s.params[i]
@@ -229,9 +236,10 @@ func (s *scope) initLocals(locals []string) error {
 			s.blockSlot = blockSlot
 			next = blockSlot + 1
 			if blockParam != nil && blockParam.Name != "" {
-				if err := bind(blockParam.Name, blockSlot); err != nil {
+				if err := bind(blockParam.Name, blockSlot+1); err != nil {
 					return err
 				}
+				next = blockSlot + 2
 			}
 		}
 	}

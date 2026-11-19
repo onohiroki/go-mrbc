@@ -20,7 +20,11 @@ splats, lambdas, multiple assignment, exceptions, pattern matching, debug
 information, and `raise`.
 
 In addition, a compile-parity check over mruby's own test tree reports **zero
-files that `mrbc` accepts and `go-mrbc` rejects** (237 files, 2026-11-19). See
+files that `mrbc` accepts and `go-mrbc` rejects** (237 files, 2026-11-19), and a
+runtime-parity check executes mruby's test files through both compilers:
+**155 of 160 runnable files agree** (including 4 that time out at the same
+point), with the remaining two differences being cases where `go-mrbc` follows
+Ruby semantics more closely than `mrbc --no-optimize`. See
 [Compatibility report](docs/compatibility-report.md).
 
 | Component | Status |
@@ -29,6 +33,7 @@ files that `mrbc` accepts and `go-mrbc` rejects** (237 files, 2026-11-19). See
 | Opcode encoder / decoder | Implemented |
 | Prism AST lowering | Implemented for the current subset |
 | Scalar expressions and control flow | Implemented |
+| Big integer literals | Implemented |
 | Methods, blocks, and closures | Implemented |
 | Classes, modules, and inheritance | Implemented |
 | Keyword arguments, splats, forwarders | Implemented |
@@ -179,6 +184,7 @@ make build     # build ./gomrbc
 make test      # unit tests and conformance tests
 make conformance
 make compat    # compile-parity check against mruby's test tree
+make runtime   # runtime-parity check against mruby's test tree
 ```
 
 Conformance tests require mruby 4.0.0 and `mrbc` on `PATH`; see

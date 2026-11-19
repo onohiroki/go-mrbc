@@ -29,8 +29,12 @@ func (c *Compiler) compileExpr(s *scope, expr frontend.Expr, dst int) {
 		s.emit(bytecode.OpLOADFALSE, uint32(dst))
 	case *frontend.SelfExpr:
 		s.emit(bytecode.OpLOADSELF, uint32(dst))
+	case *frontend.ObjectClassExpr:
+		s.emit(bytecode.OpOCLASS, uint32(dst))
 	case *frontend.IntegerLiteral:
 		c.compileInteger(s, dst, e.Value)
+	case *frontend.BigIntLiteral:
+		s.emit(bytecode.OpLOADL, uint32(dst), uint32(s.irep.PoolIndex(bytecode.BigIntEntry(e.Digits, e.Negative))))
 	case *frontend.FloatLiteral:
 		index := s.irep.PoolIndex(bytecode.FloatEntry(e.Value))
 		s.emit(bytecode.OpLOADL, uint32(dst), uint32(index))
@@ -254,6 +258,15 @@ func (c *Compiler) compileExpr(s *scope, expr frontend.Expr, dst int) {
 		}
 
 	case *frontend.BreakExpr:
+		if s.loop != nil {
+			if e.Value != nil {
+				c.compileExpr(s, e.Value, s.loop.resultReg)
+			} else {
+				s.emit(bytecode.OpLOADNIL, uint32(s.loop.resultReg))
+			}
+			s.asm.jmpuw(s.loop.breakTarget)
+			return
+		}
 		if s.kind == scopeBlock {
 			value := s.alloc(1)
 			if e.Value != nil {
@@ -274,17 +287,16 @@ func (c *Compiler) compileExpr(s *scope, expr frontend.Expr, dst int) {
 			s.emit(bytecode.OpRETURN, uint32(value))
 			return
 		}
-		if s.loop == nil {
-			c.failExpr(e, "break outside a loop is not supported yet")
+		c.failExpr(e, "break outside a loop is not supported yet")
+	case *frontend.NextExpr:
+		if s.loop != nil {
+			if e.Value != nil {
+				tmp := s.alloc(1)
+				c.compileExpr(s, e.Value, tmp)
+			}
+			s.asm.jmpuw(s.loop.continueTarget)
 			return
 		}
-		if e.Value != nil {
-			c.compileExpr(s, e.Value, s.loop.resultReg)
-		} else {
-			s.emit(bytecode.OpLOADNIL, uint32(s.loop.resultReg))
-		}
-		s.asm.jmpuw(s.loop.breakTarget)
-	case *frontend.NextExpr:
 		if s.kind == scopeBlock || s.kind == scopeLambda {
 			if e.Value == nil {
 				s.emit(bytecode.OpRETNIL)
@@ -295,15 +307,7 @@ func (c *Compiler) compileExpr(s *scope, expr frontend.Expr, dst int) {
 			s.emit(bytecode.OpRETURN, uint32(value))
 			return
 		}
-		if s.loop == nil {
-			c.failExpr(e, "next outside a loop is not supported yet")
-			return
-		}
-		if e.Value != nil {
-			tmp := s.alloc(1)
-			c.compileExpr(s, e.Value, tmp)
-		}
-		s.asm.jmpuw(s.loop.continueTarget)
+		c.failExpr(e, "next outside a loop is not supported yet")
 
 	case *frontend.YieldExpr:
 		c.compileYield(s, e, dst)
@@ -1275,7 +1279,34 @@ func (c *Compiler) compileCallPrepared(s *scope, e *frontend.Call, dst, preRecei
 		}
 	}
 	s.emit(op, uint32(base), s.sym(e.Name), argInfo)
+	if isSetterName(e.Name) && !e.ImplicitSelf() {
+		// An attribute assignment expression evaluates to the assigned value,
+		// not to the setter method's return value.
+		switch {
+		case hasPositionalSplat:
+			s.emitMove(dst, base+1)
+		case n > 0:
+			s.emitMove(dst, base+n)
+		default:
+			s.emitMove(dst, base)
+		}
+		return
+	}
 	s.emitMove(dst, base)
+}
+
+// isSetterName reports whether name is an attribute writer such as `foo=`.
+// Operator methods that end in `=` (==, <=, >=, ...) do not start with an
+// identifier character and are excluded.
+func isSetterName(name string) bool {
+	if len(name) < 2 || name[len(name)-1] != '=' {
+		return false
+	}
+	first := name[0]
+	return first == '_' ||
+		(first >= 'a' && first <= 'z') ||
+		(first >= 'A' && first <= 'Z') ||
+		first >= 0x80
 }
 
 func (c *Compiler) compileKeywordHash(s *scope, keywords []frontend.KeywordArg, dst int) {

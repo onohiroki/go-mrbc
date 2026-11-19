@@ -1,6 +1,7 @@
 mruby
 gomrbc
 compat
+runtimecompat
 *.mrb
 *.test
 dist/

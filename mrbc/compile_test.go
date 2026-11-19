@@ -23,7 +23,7 @@ func TestUnsupportedSyntax(t *testing.T) {
 		{"find pattern", "case [1, 2]\nin [*, 1, *]\n  puts 1\nend\n", "find patterns"},
 		{"rest pattern", "case [1]\nin [a, *b]\n  puts a\nend\n", "array pattern rest"},
 		{"it parameter", "[1].map { it * 2 }\n", "the 'it' block parameter"},
-		{"constant path operator", "A::X += 1\n", "operator assignment for constant paths"},
+		{"dynamic constant path operator", "self.class::X += 1\n", "dynamic constant paths"},
 		{"BEGIN block", "BEGIN { puts 1 }\n", "PreExecutionNode"},
 		{"END block", "END { puts 1 }\n", "PostExecutionNode"},
 	}

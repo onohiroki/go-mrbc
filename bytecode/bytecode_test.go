@@ -2,6 +2,7 @@ package bytecode
 
 import (
 	"bytes"
+	"math"
 	"reflect"
 	"testing"
 )
@@ -289,5 +290,39 @@ func TestDebugAndLVARSections(t *testing.T) {
 	}
 	if bytes.Contains(plain, []byte("DBG\x00")) {
 		t.Error("default dump unexpectedly contains DBG")
+	}
+}
+
+func TestPoolIndexKeepsSignedZeroDistinct(t *testing.T) {
+	irep := &Irep{}
+	positive := irep.PoolIndex(FloatEntry(0.0))
+	negative := irep.PoolIndex(FloatEntry(math.Copysign(0, -1)))
+	if positive == negative {
+		t.Fatalf("0.0 and -0.0 share pool index %d", positive)
+	}
+	if irep.Pool[negative].Float != 0 || math.Signbit(irep.Pool[negative].Float) == false {
+		t.Fatalf("-0.0 was not preserved: %v", irep.Pool[negative].Float)
+	}
+}
+
+func TestBigIntPoolRoundTrip(t *testing.T) {
+	entry := BigIntEntry("123456789012345678901234567890", false)
+	if len(entry.BigInt) != 32 {
+		t.Fatalf("payload length = %d, want 32", len(entry.BigInt))
+	}
+	irep := &Irep{Code: []byte{byte(OpSTOP), 0, 0, 0}, Nlocals: 1, Nregs: 1, Pool: []PoolEntry{entry}}
+	data, err := DumpBinary(irep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadBinary(data)
+	if err != nil {
+		t.Fatalf("ReadBinary: %v", err)
+	}
+	if len(got.Pool) != 1 || got.Pool[0].Kind != PoolBigInt {
+		t.Fatalf("pool = %#v", got.Pool)
+	}
+	if !bytes.Equal(got.Pool[0].BigInt, entry.BigInt) {
+		t.Fatalf("bigint payload mismatch: % x != % x", got.Pool[0].BigInt, entry.BigInt)
 	}
 }

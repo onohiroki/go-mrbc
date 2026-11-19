@@ -310,7 +310,9 @@ func readPoolEntry(r *reader) (PoolEntry, error) {
 		if err != nil {
 			return PoolEntry{}, err
 		}
-		rest, err := r.readBytes(int(length) + 2)
+		// The length byte counts the decimal digits. The payload that follows
+		// is the sign byte plus those digits, so it is length+1 bytes.
+		rest, err := r.readBytes(int(length) + 1)
 		if err != nil {
 			return PoolEntry{}, err
 		}

@@ -29,7 +29,10 @@ English summary.
 - [x] Safe navigation, beginless/endless ranges, array/hash splats
 - [x] Interpolated symbols and xstrings, backreferences, `defined?`
 - [x] Nested multiple assignment and destructured parameters
+- [x] Big integer literals
+- [x] Constant-path operator assignment (`A::X += 1`, `A::X ||= 1`)
 - [x] M5 compile-parity harness over mruby's test tree
+- [x] M6 runtime-parity harness over mruby's test tree
 - [ ] Optimized opcodes
 - [ ] Alternation, find, and array-rest patterns
 
@@ -104,6 +107,36 @@ both, 0 gaps, and 3 files rejected by both compilers. See
 
 The harness compares compilation only. Runtime behavior is covered by the
 conformance suite, including cases for modern syntax and destructuring.
+
+## M6 - Runtime parity
+
+- Wrap mruby's test files with `test/assert.rb` so they run under plain
+  `mruby`.
+- Compile each wrapper with both `mrbc` and `go-mrbc`, run both, and compare
+  stdout, stderr, and exit status.
+- Treat files where both implementations time out at the same point as a
+  match, comparing partial output.
+- Fix the compiler defects surfaced by the run.
+
+Status: `cmd/runtimecompat` is implemented. The 2026-11-19 snapshot covers 160
+runnable files: 155 agree (including 4 that time out at the same point), 3 are
+rejected by both compilers, and 2 differ in cases where `go-mrbc` follows Ruby
+semantics more closely than `mrbc --no-optimize`.
+
+The run also surfaced and fixed several compiler defects:
+
+- class and module bodies now return their last expression;
+- `class ::C` uses `OCLASS` as its outer scope;
+- attribute assignment expressions evaluate to the assigned value;
+- `-0.0` and `0.0` no longer share a pool entry;
+- big integer literals are emitted as `BIGINT` pool entries;
+- unnamed rest parameters and named block parameters use mruby's `LVAR`
+  layout, fixing `Proc#parameters`;
+- `break`/`next` inside a loop in a block target the loop, not the block;
+- constant `||=`/`&&=` treats an undefined constant as false;
+- constant-path operator assignment is supported for literal paths.
+
+See [compatibility-report.md](compatibility-report.md) for the full snapshot.
 
 ## Parallel project: pure-Go mruby VM
 

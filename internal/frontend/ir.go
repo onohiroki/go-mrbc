@@ -34,9 +34,22 @@ type FalseLiteral struct{ exprBase }
 
 type SelfExpr struct{ exprBase }
 
+// ObjectClassExpr compiles to OCLASS. It denotes the class of the current
+// self and is used as the outer scope of an absolute constant path such as
+// `class ::C`.
+type ObjectClassExpr struct{ exprBase }
+
 type IntegerLiteral struct {
 	exprBase
 	Value int64
+}
+
+// BigIntLiteral is an integer literal that does not fit int64. Digits holds
+// the decimal magnitude without a sign.
+type BigIntLiteral struct {
+	exprBase
+	Digits   string
+	Negative bool
 }
 
 type FloatLiteral struct {

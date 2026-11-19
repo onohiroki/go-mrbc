@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"reflect"
+	"strings"
 
 	"github.com/danielgatis/go-ruby-prism/parser"
 )
@@ -176,7 +178,7 @@ func (l *lowerer) lowerExpr(node parser.Node) (Expr, error) {
 	case *parser.SelfNode:
 		return &SelfExpr{exprBase: base(pos)}, nil
 	case *parser.IntegerNode:
-		return &IntegerLiteral{exprBase: base(pos), Value: n.Value}, nil
+		return l.lowerInteger(n, pos)
 	case *parser.FloatNode:
 		return &FloatLiteral{exprBase: base(pos), Value: n.Value}, nil
 	case *parser.StringNode:
@@ -364,7 +366,7 @@ func (l *lowerer) lowerExpr(node parser.Node) (Expr, error) {
 		if err != nil {
 			return nil, err
 		}
-		read := &ConstantRead{exprBase: base(pos), Name: n.Name}
+		read := softConstantRead(&ConstantRead{exprBase: base(pos), Name: n.Name}, pos)
 		return &AndExpr{
 			exprBase: base(pos),
 			Left:     read,
@@ -375,7 +377,7 @@ func (l *lowerer) lowerExpr(node parser.Node) (Expr, error) {
 		if err != nil {
 			return nil, err
 		}
-		read := &ConstantRead{exprBase: base(pos), Name: n.Name}
+		read := softConstantRead(&ConstantRead{exprBase: base(pos), Name: n.Name}, pos)
 		return &OrExpr{
 			exprBase: base(pos),
 			Left:     read,
@@ -779,9 +781,51 @@ func (l *lowerer) lowerExpr(node parser.Node) (Expr, error) {
 
 	case *parser.MultiWriteNode:
 		return l.lowerMultiWrite(n)
-	case *parser.ConstantPathOperatorWriteNode, *parser.ConstantPathAndWriteNode,
-		*parser.ConstantPathOrWriteNode:
-		return nil, l.errorf(n, "operator assignment for constant paths is not supported yet")
+	case *parser.ConstantPathOperatorWriteNode:
+		name, parent, err := l.lowerConstantPathTarget(n.Target)
+		if err != nil {
+			return nil, err
+		}
+		value, err := l.lowerExpr(n.Value)
+		if err != nil {
+			return nil, err
+		}
+		return l.binaryAssign(
+			&ConstantPathRead{exprBase: base(pos), Parent: parent, Name: name},
+			n.BinaryOperator, value, pos, func(v Expr) Expr {
+				return &ConstantPathWrite{exprBase: base(pos), Parent: parent, Name: name, Value: v}
+			},
+		), nil
+	case *parser.ConstantPathAndWriteNode:
+		name, parent, err := l.lowerConstantPathTarget(n.Target)
+		if err != nil {
+			return nil, err
+		}
+		value, err := l.lowerExpr(n.Value)
+		if err != nil {
+			return nil, err
+		}
+		read := softConstantRead(&ConstantPathRead{exprBase: base(pos), Parent: parent, Name: name}, pos)
+		return &AndExpr{
+			exprBase: base(pos),
+			Left:     read,
+			Right:    &ConstantPathWrite{exprBase: base(pos), Parent: parent, Name: name, Value: value},
+		}, nil
+	case *parser.ConstantPathOrWriteNode:
+		name, parent, err := l.lowerConstantPathTarget(n.Target)
+		if err != nil {
+			return nil, err
+		}
+		value, err := l.lowerExpr(n.Value)
+		if err != nil {
+			return nil, err
+		}
+		read := softConstantRead(&ConstantPathRead{exprBase: base(pos), Parent: parent, Name: name}, pos)
+		return &OrExpr{
+			exprBase: base(pos),
+			Left:     read,
+			Right:    &ConstantPathWrite{exprBase: base(pos), Parent: parent, Name: name, Value: value},
+		}, nil
 
 	case *parser.ClassNode:
 		return l.lowerClass(n)
@@ -1355,6 +1399,44 @@ func (l *lowerer) keywordHashPositional(node *parser.KeywordHashNode) bool {
 	return false
 }
 
+func softConstantRead(read Expr, pos Position) Expr {
+	return &BeginExpr{
+		exprBase: base(pos),
+		Body:     []Expr{read},
+		Rescues: []RescueClause{{
+			Pos:  pos,
+			Body: []Expr{&FalseLiteral{exprBase: base(pos)}},
+		}},
+	}
+}
+
+// lowerConstantPathTarget lowers a constant path used as an assignment target.
+// Reading the parent twice is only safe when it is a constant lookup, so
+// dynamic parents are rejected instead of being evaluated twice.
+func (l *lowerer) lowerConstantPathTarget(node parser.Node) (string, Expr, error) {
+	path, ok := node.(*parser.ConstantPathNode)
+	if !ok {
+		return "", nil, l.errorf(node, "unsupported constant path target")
+	}
+	if path.Parent != nil && !isConstantPath(path.Parent) {
+		return "", nil, l.errorf(path.Parent, "operator assignment for dynamic constant paths is not supported")
+	}
+	return l.lowerConstantTarget(node)
+}
+
+func isConstantPath(node parser.Node) bool {
+	switch n := node.(type) {
+	case nil:
+		return true
+	case *parser.ConstantReadNode:
+		return true
+	case *parser.ConstantPathNode:
+		return n.Parent == nil || isConstantPath(n.Parent)
+	default:
+		return false
+	}
+}
+
 func (l *lowerer) binaryAssign(read Expr, op string, value Expr, pos Position, write func(Expr) Expr) Expr {
 	switch op {
 	case "||":
@@ -1551,7 +1633,7 @@ func (l *lowerer) lowerConstantTarget(node parser.Node) (string, Expr, error) {
 			if n.Name == nil {
 				return "", nil, l.errorf(n, "dynamic constant name is not supported")
 			}
-			return *n.Name, nil, nil
+			return *n.Name, &ObjectClassExpr{exprBase: base(l.pos(n))}, nil
 		}
 		parent, err := l.lowerExpr(n.Parent)
 		if err != nil {
@@ -1975,6 +2057,38 @@ func (l *lowerer) lowerMultiValue(args *parser.ArgumentsNode) (Expr, error) {
 		elements = append(elements, expr)
 	}
 	return &ArrayLiteral{exprBase: base(l.pos(args)), Elements: elements}, nil
+}
+
+func (l *lowerer) lowerInteger(n *parser.IntegerNode, pos Position) (Expr, error) {
+	start := n.Location.StartOffset
+	end := start + n.Location.Length
+	if start < 0 || end > len(l.source.text) || start >= end {
+		return &IntegerLiteral{exprBase: base(pos), Value: n.Value}, nil
+	}
+	raw := string(l.source.text[start:end])
+	text := strings.ReplaceAll(raw, "_", "")
+	sign := ""
+	if strings.HasPrefix(text, "-") || strings.HasPrefix(text, "+") {
+		sign, text = text[:1], text[1:]
+	}
+	radix := 0
+	if strings.HasPrefix(text, "0d") || strings.HasPrefix(text, "0D") {
+		text = text[2:]
+		radix = 10
+	}
+	value, ok := new(big.Int).SetString(sign+text, radix)
+	if !ok {
+		return nil, l.errorf(n, "invalid integer literal %q", raw)
+	}
+	if value.IsInt64() {
+		return &IntegerLiteral{exprBase: base(pos), Value: value.Int64()}, nil
+	}
+	negative := value.Sign() < 0
+	magnitude := new(big.Int).Abs(value).String()
+	if len(magnitude) > 255 {
+		return nil, l.errorf(n, "integer literal is too large")
+	}
+	return &BigIntLiteral{exprBase: base(pos), Digits: magnitude, Negative: negative}, nil
 }
 
 func (l *lowerer) lowerInterpolatedString(n *parser.InterpolatedStringNode) (Expr, error) {

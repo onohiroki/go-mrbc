@@ -25,7 +25,7 @@ milestones. Features are enabled as their compiler support lands.
 | Feature | Status |
 | --- | --- |
 | `nil`, `true`, `false` | Supported |
-| Integers (32/64-bit), `Rational` and `Imaginary` literals | Supported |
+| Integers (32/64-bit and big integers), `Rational` and `Imaginary` literals | Supported |
 | Floats | Supported |
 | Strings, symbols, string interpolation | Supported |
 | Interpolated symbols (`:"a#{x}b"`) and xstrings | Supported |
@@ -36,7 +36,7 @@ milestones. Features are enabled as their compiler support lands.
 | Local variables and closures | Supported |
 | Global variables, numbered references (`$1`) and backreferences (`$&`) | Supported |
 | Instance and class variables | Supported |
-| Constants (writes, reads, and `A::B` reads/writes) | Supported |
+| Constants (writes, reads, `A::B` reads/writes, and operator assignment) | Supported |
 | Operator assignment (locals, globals, ivars, cvars, attributes, index) | Supported |
 | `if` / `unless` / `elsif` / `while` / `until` | Supported |
 | `case` / `when` | Supported |
@@ -78,9 +78,8 @@ The current subset is intentionally conservative:
 - `yield` is supported in a method body and in blocks nested inside that
   method. Yielding from class bodies or lambdas is rejected.
 - The `it` implicit block parameter is rejected; numbered parameters (`_1`)
-  are supported.
-- Constant-path operator assignment (`A::X += 1`) is rejected; `A::X = 1`
-  writes and `A::X` reads work.
+  are supported. mruby 4.0's own compiler lowers `it` to a method call that is
+  undefined at runtime, so accepting it would not make the program work.
 - Pattern matching supports value, variable, capture, array, hash (including
   `**rest`), guard, and pinned patterns. Alternation patterns, find patterns,
   and array rest patterns (`[a, *b]`) are rejected.
@@ -90,10 +89,12 @@ The current subset is intentionally conservative:
 - Hash splats are rejected inside a positional hash argument to a method
   (`foo("k" => 1, **h)`).
 - Dynamic constant names (`A.const_set(name, x)`) are rejected; constant paths
-  must be literal.
+  must be literal when they are assignment targets.
 - Regular expression literals compile, but executing them requires an mruby
   build with the `mruby-regexp` mrbgem. Matching operators (`=~`) are not
   lowered yet.
+- Big integer literals compile, but running them requires an mruby build with
+  the `mruby-bigint` mrbgem.
 
 These restrictions are checked during compilation and produce
 `file:line:column` errors.
@@ -106,12 +107,37 @@ column. They are never silently ignored.
 Current explicit rejections include:
 
 - the `it` implicit block parameter
-- constant-path operator assignment (`A::X += 1`)
 - alternation, find, and array-rest patterns
 - `BEGIN` / `END` blocks
 - `eval`, `load`, and `require` (host responsibilities)
 - encoding and magic comments
 - fibers, threads, refinements, and `TracePoint`
+
+## Runtime parity
+
+`cmd/runtimecompat` runs mruby's own test files through both compilers. The
+2026-11-19 snapshot covers 160 runnable files:
+
+| Result | Count |
+| --- | --- |
+| Identical stdout/stderr/exit status | 155 |
+| Rejected by both compilers | 3 |
+| Different output | 2 |
+
+Four of the 155 identical files time out at the same point under both
+compilers; the harness compares their partial output.
+
+The two differences are intentional:
+
+- **Integer arithmetic redefinition.** `go-mrbc` compiles operators as `SEND`,
+  so a redefined `Integer#+` is observed. `mrbc --no-optimize` emits `OP_ADD`
+  and the VM does not reach the redefinition.
+- **`next` inside `rescue` inside a `while` in a block.** `go-mrbc` continues
+  the loop; the reference binary returns from the block instead.
+
+Both cases are ones where the mruby test suite itself expects the behavior
+`go-mrbc` produces. They are kept as deliberate differences rather than
+reproducing the reference compiler's output.
 
 ## Semantic notes
 
@@ -121,6 +147,20 @@ Arithmetic, comparison, indexing, and unary operators are compiled as method
 calls. For example, `a + b` becomes a `SEND` of `:+`. This matches Ruby's
 method-dispatch semantics and avoids relying on specialized opcodes before
 their behavior is verified. Optimized opcodes may be added later.
+
+### Class and module expressions
+
+A `class`, `module`, or `class << obj` expression evaluates to the value of its
+body, matching mruby's `EXEC` result. An empty body evaluates to `nil`.
+`class ::C` defines the class at the top level by using `OCLASS` as its outer
+scope.
+
+### Constant assignment
+
+Writes through a constant path (`A::X = v`, `A::X += v`, `A::X ||= v`) are
+supported when the path is built from literal constants. mruby's `mrbc`
+rejects ordinary constant reassignment at compile time; `go-mrbc` does not
+enforce that policy, so this is a deliberate superset.
 
 ### Exceptions
 

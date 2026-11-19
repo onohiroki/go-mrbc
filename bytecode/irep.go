@@ -44,6 +44,21 @@ func FloatEntry(v float64) PoolEntry {
 	return PoolEntry{Kind: PoolFloat, Float: v}
 }
 
+// BigIntEntry returns a big-integer pool entry. mruby stores the decimal
+// digits together with a length byte and a sign byte; the sign byte is the
+// base passed to mrb_bint_new_str, so it is 10 or -10.
+func BigIntEntry(digits string, negative bool) PoolEntry {
+	payload := make([]byte, 0, len(digits)+2)
+	payload = append(payload, byte(len(digits)))
+	if negative {
+		payload = append(payload, byte(0xF6)) // int8(-10)
+	} else {
+		payload = append(payload, 10)
+	}
+	payload = append(payload, digits...)
+	return PoolEntry{Kind: PoolBigInt, BigInt: payload}
+}
+
 // CatchHandler describes a rescue or ensure handler.
 type CatchHandler struct {
 	Type   uint8
@@ -121,7 +136,8 @@ func (irep *Irep) PoolIndex(entry PoolEntry) int {
 				return i
 			}
 		case PoolFloat:
-			if existing.Float == entry.Float {
+			// Compare bits so that -0.0 and 0.0 stay distinct.
+			if math.Float64bits(existing.Float) == math.Float64bits(entry.Float) {
 				return i
 			}
 		}
