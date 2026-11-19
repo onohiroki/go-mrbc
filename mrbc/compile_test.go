@@ -23,13 +23,9 @@ func TestUnsupportedSyntax(t *testing.T) {
 		{"hash pattern", "case { a: 1 }\nin { a: }\nend\n", "hash patterns"},
 		{"alternation pattern", "case 1\nin 1 | 2\n  puts 1\nend\n", "alternation patterns"},
 		{"rest pattern", "case [1]\nin [a, *b]\n  puts a\nend\n", "array pattern rest"},
+		{"it parameter", "[1].map { it * 2 }\n", "the 'it' block parameter"},
+		{"nested multiple target", "(a, b), c = [1, 2]\n", "unsupported multiple assignment target"},
 		{"splat rescue classes", "begin\n  foo\nrescue *ERRORS\n  nil\nend\n", "splat rescue classes"},
-		{"for destructuring", "for a, b in [[1, 2]]\n  puts a\nend\n", "unsupported multiple assignment target"},
-		{"index target", "a = [1]\na[0], b = [1, 2]\n", "unsupported multiple assignment target"},
-		{"keyword and splat", "a = [1]\nf(*a, k: 1)\n", "keyword arguments combined with splat"},
-		{"keyword splat and keys", "h = {}\nf(**h, k: 1)\n", "keyword splats combined with explicit keywords"},
-		{"post parameter", "def f(a, *b, c)\nend\n", "post parameters"},
-		{"anonymous block parameter", "def f(&)\nend\n", "anonymous block parameters"},
 		{"safe navigation", "x = nil\nx&.to_s\n", "safe navigation"},
 	}
 	for _, tt := range tests {

@@ -34,24 +34,26 @@ milestones. Features are enabled as their compiler support lands.
 | Global variables | Supported |
 | Instance and class variables | Supported |
 | Constants (simple writes, reads, and `A::B` reads) | Supported |
-| Operator assignment (`+=`, `||=`, `&&=` on locals, globals, ivars, cvars) | Supported |
+| Operator assignment (locals, globals, ivars, cvars, attributes, index) | Supported |
 | `if` / `unless` / `elsif` / `while` / `until` | Supported |
 | `case` / `when` | Supported |
 | `&&`, `||`, `!` | Supported |
 | Method calls, positional arguments | Supported |
-| `def` with required, optional, and rest parameters | Supported |
-| Keyword parameters and keyword arguments | Supported |
+| `def` with required, optional, post, rest, and keyword parameters | Supported |
+| Keyword arguments, splats, and their combinations | Supported |
+| Argument forwarding (`...`) and anonymous block forwarding (`&`) | Supported |
+| Numbered block parameters (`_1`, `_2`, ...) | Supported |
 | Splat arguments and block arguments (`&blk`) | Supported |
 | Blocks and `yield` | Supported |
 | `break` / `next` (loops, blocks, lambdas) | Supported |
 | `return` from methods and blocks | Supported |
 | `raise` | Supported |
-| Classes, modules, inheritance, `super` | Supported |
+| Classes, modules, inheritance, `super` (including from blocks) | Supported |
 | Nested classes and `A::B` class definitions | Supported |
 | Class methods, singleton methods, and `class << self` | Supported |
 | `lambda` / `proc` | Supported |
-| Multiple assignment (including splat targets) | Supported |
-| `for` | Supported |
+| Multiple assignment (locals, globals, ivars, constants, index, attributes, splats) | Supported |
+| `for` (including destructuring targets) | Supported |
 | `begin` / `rescue` / `ensure` / `else` | Supported |
 | `retry` / `redo` | Supported |
 | `alias` / `undef` | Supported |
@@ -67,21 +69,11 @@ The current subset is intentionally conservative:
 
 - `yield` is supported in a method body and in blocks nested inside that
   method. Yielding from class bodies or lambdas is rejected.
-- `for` loops support a single local, global, instance-variable, or constant
-  target. Destructuring targets (`for a, b in ...`) are rejected.
-- Anonymous block forwarding (`def f(&); g(&); end`) is rejected.
-- Keyword arguments combined with positional splats in the same call are
-  rejected (`f(*a, k: 1)`).
-- Keyword splats combined with explicit keyword pairs are rejected
-  (`f(**h, k: 1)`).
-- Explicit keyword arguments to `super` are rejected, as is forwarding from a
-  method that declares both named keywords and `**rest`.
-- Multiple assignment supports local, global, instance-variable, constant, and
-  splat targets. Index/attribute targets (`a[0], b = ...`) are rejected.
-- Nested constant writes (`A::X = 1`) are rejected; `A::X` reads work.
-- Operator assignment to attributes and index expressions is rejected
-  (for example `a[0] += 1` and `obj.attr ||= 1`).
-- Methods with post parameters are rejected.
+- The `it` implicit block parameter is rejected; numbered parameters (`_1`)
+  are supported.
+- Nested multiple assignment targets such as `(a, b), c = ...` are rejected.
+- Constant-path writes and operator assignments (`A::X = 1`, `A::X += 1`)
+  are rejected; `A::X` reads work.
 - `defined?` is rejected; mruby 4.0 itself compiles it as a method call.
 - Pattern matching supports value, variable, capture, array, guard, and pinned
   patterns. Hash patterns, alternation patterns, find patterns, and array
@@ -99,7 +91,8 @@ column. They are never silently ignored.
 
 Current explicit rejections include:
 
-- numbered block parameters and anonymous block forwarding
+- the `it` implicit block parameter
+- nested multiple assignment targets and constant-path writes/operators
 - safe navigation (`&.`) and other unimplemented node kinds
 - hash, alternation, find, and array-rest patterns
 - `defined?`

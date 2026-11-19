@@ -108,6 +108,18 @@ func (c *Compiler) compileExpr(s *scope, expr frontend.Expr, dst int) {
 
 	case *frontend.InstanceRead:
 		s.emit(bytecode.OpGETIV, uint32(dst), s.sym(e.Name))
+	case *frontend.BlockSlotExpr:
+		if s.method == nil || s.method.methodInfo == nil || s.method.methodInfo.blockSlot < 0 || s.yieldLevel < 0 {
+			c.failExpr(e, "block argument forwarding is not available here")
+			return
+		}
+		slot := s.method.methodInfo.blockSlot
+		if s.yieldLevel == 0 {
+			s.emitMove(dst, slot)
+		} else {
+			s.emit(bytecode.OpGETUPVAR, uint32(dst), uint32(slot), uint32(s.yieldLevel-1))
+		}
+
 	case *frontend.InstanceWrite:
 		value := s.alloc(1)
 		c.compileExpr(s, e.Value, value)
@@ -601,38 +613,41 @@ func (c *Compiler) compileMultiWrite(s *scope, e *frontend.MultiWrite, dst int) 
 	value := s.alloc(1)
 	c.compileExpr(s, e.Value, value)
 	sp0 := s.sp
-
-	if e.Rest == nil {
-		for i, target := range e.Targets {
-			if !c.assignIndexed(s, target, value, i, sp0) {
-				return
-			}
-		}
-		s.emitMove(dst, value)
+	if !c.assignDestructure(s, e.Targets, e.Rest, e.Posts, value, sp0) {
 		return
 	}
+	s.emitMove(dst, value)
+}
 
-	for i, target := range e.Targets {
+func (c *Compiler) assignDestructure(s *scope, targets []frontend.MultiTarget, rest *frontend.MultiTarget, posts []frontend.MultiTarget, value, sp0 int) bool {
+	if rest == nil {
+		for i, target := range targets {
+			if !c.assignIndexed(s, target, value, i, sp0) {
+				return false
+			}
+		}
+		return true
+	}
+
+	for i, target := range targets {
 		if !c.assignIndexed(s, target, value, i, sp0) {
-			return
+			return false
 		}
 	}
 	work := s.alloc(1)
 	s.emitMove(work, value)
-	s.setSP(work + 1 + len(e.Posts))
-	s.emit(bytecode.OpAPOST, uint32(work), uint32(len(e.Targets)), uint32(len(e.Posts)))
-	if e.Rest != nil {
-		if !c.assignDirect(s, *e.Rest, work) {
-			return
-		}
+	s.setSP(work + 1 + len(posts))
+	s.emit(bytecode.OpAPOST, uint32(work), uint32(len(targets)), uint32(len(posts)))
+	if !c.assignDirect(s, *rest, work) {
+		return false
 	}
-	for i, target := range e.Posts {
+	for i, target := range posts {
 		if !c.assignDirect(s, target, work+1+i) {
-			return
+			return false
 		}
 	}
 	s.sp = sp0
-	s.emitMove(dst, value)
+	return true
 }
 
 func (c *Compiler) assignIndexed(s *scope, target frontend.MultiTarget, value, index, sp0 int) bool {
@@ -666,6 +681,12 @@ func (c *Compiler) assignIndexed(s *scope, target frontend.MultiTarget, value, i
 		}
 		s.sp = sp0
 		return true
+	case frontend.TargetCall, frontend.TargetIndex:
+		temp := s.alloc(1)
+		s.emit(bytecode.OpAREF, uint32(temp), uint32(value), uint32(index))
+		ok := c.emitTargetAssign(s, target, temp)
+		s.sp = sp0
+		return ok
 	default:
 		c.fail(target.Pos, "unsupported multiple assignment target")
 		return false
@@ -700,6 +721,43 @@ func (c *Compiler) assignDirect(s *scope, target frontend.MultiTarget, src int) 
 		return true
 	case frontend.TargetConstant:
 		s.emit(bytecode.OpSETCONST, uint32(src), s.sym(target.Name))
+		return true
+	case frontend.TargetCall, frontend.TargetIndex:
+		sp0 := s.sp
+		ok := c.emitTargetAssign(s, target, src)
+		s.sp = sp0
+		return ok
+	default:
+		c.fail(target.Pos, "unsupported multiple assignment target")
+		return false
+	}
+}
+
+func (c *Compiler) emitTargetAssign(s *scope, target frontend.MultiTarget, src int) bool {
+	if target.Receiver == nil {
+		c.fail(target.Pos, "multiple assignment target has no receiver")
+		return false
+	}
+	switch target.Kind {
+	case frontend.TargetCall:
+		base := s.alloc(2)
+		c.compileExpr(s, target.Receiver, base)
+		s.emitMove(base+1, src)
+		s.emit(bytecode.OpSEND, uint32(base), s.sym(target.Name), 1)
+		return true
+	case frontend.TargetIndex:
+		n := len(target.Args)
+		if n > 13 {
+			c.fail(target.Pos, "too many index arguments in multiple assignment")
+			return false
+		}
+		base := s.alloc(2 + n)
+		c.compileExpr(s, target.Receiver, base)
+		for i, arg := range target.Args {
+			c.compileExpr(s, arg, base+1+i)
+		}
+		s.emitMove(base+1+n, src)
+		s.emit(bytecode.OpSEND, uint32(base), s.sym("[]="), uint32(n+1))
 		return true
 	default:
 		c.fail(target.Pos, "unsupported multiple assignment target")
@@ -742,27 +800,16 @@ func (c *Compiler) compileForBlock(parent *scope, e *frontend.ForExpr) *bytecode
 		c.fail(e.Position(), "compiler: internal error: missing for-loop value slot")
 		return nil
 	}
-	switch e.Target.Kind {
-	case frontend.TargetLocal:
-		depth := s.effectiveDepth(e.Target.Depth)
-		slot, level, ok := s.resolveUpvar(e.Target.Name, depth)
-		if !ok {
-			c.fail(e.Target.Pos, "cannot resolve for-loop variable %q", e.Target.Name)
+	sp0 := s.sp
+	if e.Rest == nil && len(e.Targets) == 1 && len(e.Posts) == 0 {
+		if !c.assignDirect(s, e.Targets[0], synthetic) {
 			return nil
 		}
-		s.emit(bytecode.OpSETUPVAR, uint32(synthetic), uint32(slot), uint32(level))
-	case frontend.TargetGlobal:
-		s.emit(bytecode.OpSETGV, uint32(synthetic), s.sym(e.Target.Name))
-	case frontend.TargetInstance:
-		s.emit(bytecode.OpSETIV, uint32(synthetic), s.sym(e.Target.Name))
-	case frontend.TargetConstant:
-		s.emit(bytecode.OpSETCONST, uint32(synthetic), s.sym(e.Target.Name))
-	default:
-		c.fail(e.Target.Pos, "unsupported for-loop target")
+	} else if !c.assignDestructure(s, e.Targets, e.Rest, e.Posts, synthetic, sp0) {
 		return nil
 	}
+	s.sp = sp0
 
-	sp0 := s.sp
 	redoLabel := s.asm.newLabel()
 	s.asm.bind(redoLabel)
 	prevRedo, prevHasRedo := s.redoTarget, s.hasRedo
@@ -913,6 +960,10 @@ func (c *Compiler) compileCall(s *scope, e *frontend.Call, dst int) {
 		c.failExpr(e, "both a block and a block argument are not allowed")
 		return
 	}
+	if e.ForwardAll {
+		c.compileForwardAll(s, e, dst)
+		return
+	}
 
 	blockIndex := -1
 	if e.Block != nil {
@@ -923,96 +974,75 @@ func (c *Compiler) compileCall(s *scope, e *frontend.Call, dst int) {
 		blockIndex = s.irep.AddChild(child)
 	}
 
-	hasSplat := false
+	hasPositionalSplat := false
 	for _, arg := range e.Args {
 		if _, ok := arg.(*frontend.SplatArg); ok {
-			hasSplat = true
+			hasPositionalSplat = true
+			break
+		}
+	}
+	hasKeywordSplat := false
+	for _, kw := range e.Keywords {
+		if kw.IsSplat() {
+			hasKeywordSplat = true
 			break
 		}
 	}
 
-	if hasSplat {
-		if len(e.Keywords) > 0 || e.KeywordSplat != nil {
-			c.failExpr(e, "keyword arguments combined with splat arguments are not supported yet")
-			return
-		}
-		hasBlock := blockIndex >= 0 || e.BlockArg != nil
-		base := s.alloc(1)
-		if !e.ImplicitSelf() {
-			c.compileExpr(s, e.Receiver, base)
-		}
-		arrayReg := s.alloc(1)
-		c.buildArgArray(s, e.Args, arrayReg)
-		if hasBlock {
-			blockReg := s.alloc(1)
-			c.compileBlockOperand(s, blockIndex, e.BlockArg, blockReg)
-		}
-		op := bytecode.OpSEND
-		if e.ImplicitSelf() {
-			op = bytecode.OpSSEND
-		}
-		if hasBlock {
-			if e.ImplicitSelf() {
-				op = bytecode.OpSSENDB
-			} else {
-				op = bytecode.OpSENDB
-			}
-		}
-		s.emit(op, uint32(base), s.sym(e.Name), 15)
-		s.emitMove(dst, base)
-		return
-	}
-
-	const maxArgs = 14
 	n := len(e.Args)
-	if n > maxArgs {
-		c.failExpr(e, "too many arguments (maximum %d)", maxArgs)
+	if !hasPositionalSplat && n > 14 {
+		c.failExpr(e, "too many arguments (maximum 14)")
 		return
 	}
+	keywordHash := hasKeywordSplat || len(e.Keywords) > 14
 	keywordCount := len(e.Keywords)
-	keywordHash := false
-	if e.KeywordSplat != nil {
-		if keywordCount > 0 {
-			c.failExpr(e, "keyword splats combined with explicit keywords are not supported yet")
-			return
-		}
-		keywordHash = true
+	if keywordHash {
 		keywordCount = 15
 	}
-	keywordRegs := 0
+	keywordRegs := keywordCount * 2
 	if keywordHash {
 		keywordRegs = 1
-	} else {
-		keywordRegs = keywordCount * 2
+	}
+	positionalRegs := n
+	if hasPositionalSplat {
+		positionalRegs = 1
 	}
 	hasBlock := blockIndex >= 0 || e.BlockArg != nil
-	extra := 0
+	blockRegs := 0
 	if hasBlock {
-		extra = 1
+		blockRegs = 1
 	}
 
-	base := s.alloc(1 + n + keywordRegs + extra)
+	base := s.alloc(1 + positionalRegs + keywordRegs + blockRegs)
 	if !e.ImplicitSelf() {
 		c.compileExpr(s, e.Receiver, base)
 	}
-	for i, arg := range e.Args {
-		c.compileExpr(s, arg, base+1+i)
-	}
-	keywordBase := base + 1 + n
-	if keywordHash {
-		c.compileExpr(s, e.KeywordSplat, keywordBase)
+	if hasPositionalSplat {
+		c.buildArgArray(s, e.Args, base+1)
 	} else {
-		for i, pair := range e.Keywords {
-			c.compileExpr(s, pair.Key, keywordBase+2*i)
-			c.compileExpr(s, pair.Value, keywordBase+2*i+1)
+		for i, arg := range e.Args {
+			c.compileExpr(s, arg, base+1+i)
+		}
+	}
+	keywordBase := base + 1 + positionalRegs
+	if keywordHash {
+		c.compileKeywordHash(s, e.Keywords, keywordBase)
+	} else {
+		for i, kw := range e.Keywords {
+			c.compileExpr(s, kw.Key, keywordBase+2*i)
+			c.compileExpr(s, kw.Value, keywordBase+2*i+1)
 		}
 	}
 	if hasBlock {
-		blockReg := base + 1 + n + keywordRegs
+		blockReg := keywordBase + keywordRegs
 		c.compileBlockOperand(s, blockIndex, e.BlockArg, blockReg)
 	}
 
-	argInfo := uint32(n) | uint32(keywordCount)<<4
+	positionalInfo := uint32(n)
+	if hasPositionalSplat {
+		positionalInfo = 15
+	}
+	argInfo := positionalInfo | uint32(keywordCount)<<4
 	op := bytecode.OpSEND
 	if e.ImplicitSelf() {
 		op = bytecode.OpSSEND
@@ -1026,6 +1056,71 @@ func (c *Compiler) compileCall(s *scope, e *frontend.Call, dst int) {
 	}
 	s.emit(op, uint32(base), s.sym(e.Name), argInfo)
 	s.emitMove(dst, base)
+}
+
+func (c *Compiler) compileKeywordHash(s *scope, keywords []frontend.KeywordArg, dst int) {
+	s.emit(bytecode.OpHASH, uint32(dst), 0)
+	headerSP := s.sp
+	for _, kw := range keywords {
+		if kw.IsSplat() {
+			s.setSP(dst + 2)
+			c.compileExpr(s, kw.Value, dst+1)
+			s.emit(bytecode.OpHASHCAT, uint32(dst))
+			continue
+		}
+		s.setSP(dst + 3)
+		c.compileExpr(s, kw.Key, dst+1)
+		c.compileExpr(s, kw.Value, dst+2)
+		s.emit(bytecode.OpHASHADD, uint32(dst), 1)
+	}
+	s.sp = headerSP
+}
+
+func (c *Compiler) compileForwardAll(s *scope, e *frontend.Call, dst int) {
+	if s.method == nil || s.method.methodInfo == nil || s.yieldLevel < 0 {
+		c.failExpr(e, "argument forwarding is not available here")
+		return
+	}
+	info := s.method.methodInfo
+	if info.restSlot < 0 || info.keywordSlot < 0 || info.blockSlot < 0 {
+		c.failExpr(e, "argument forwarding requires a method declared with ...")
+		return
+	}
+
+	base := s.alloc(4)
+	if !e.ImplicitSelf() {
+		c.compileExpr(s, e.Receiver, base)
+	}
+
+	arrayReg := base + 1
+	keywordReg := base + 2
+	blockReg := base + 3
+
+	s.emit(bytecode.OpLOADNIL, uint32(arrayReg))
+	c.emitMethodSlot(s, keywordReg, info.restSlot)
+	s.emit(bytecode.OpARYCAT, uint32(arrayReg))
+
+	s.emit(bytecode.OpHASH, uint32(keywordReg), 0)
+	c.emitMethodSlot(s, blockReg, info.keywordSlot)
+	s.emit(bytecode.OpHASHCAT, uint32(keywordReg))
+
+	c.emitMethodSlot(s, blockReg, info.blockSlot)
+
+	op := bytecode.OpSENDB
+	if e.ImplicitSelf() {
+		op = bytecode.OpSSENDB
+	}
+	argInfo := uint32(15) | 15<<4
+	s.emit(op, uint32(base), s.sym(e.Name), argInfo)
+	s.emitMove(dst, base)
+}
+
+func (c *Compiler) emitMethodSlot(s *scope, dst, slot int) {
+	if s.yieldLevel == 0 {
+		s.emitMove(dst, slot)
+		return
+	}
+	s.emit(bytecode.OpGETUPVAR, uint32(dst), uint32(slot), uint32(s.yieldLevel-1))
 }
 
 func (c *Compiler) compileBlockOperand(s *scope, blockIndex int, blockArg frontend.Expr, reg int) {
@@ -1084,23 +1179,20 @@ func (c *Compiler) buildArgArray(s *scope, args []frontend.Expr, dst int) {
 }
 
 func (c *Compiler) compileSuper(s *scope, e *frontend.SuperExpr, dst int) {
-	if s.yieldLevel != 0 || s.method == nil || s.method.methodInfo == nil {
-		c.failExpr(e, "super is only supported directly in a method body")
+	if s.yieldLevel < 0 || s.method == nil || s.method.methodInfo == nil {
+		c.failExpr(e, "super is not available here")
 		return
 	}
 	info := s.method.methodInfo
+	level := s.yieldLevel
 
 	if e.Forwarding {
 		if info.ainfo > 0 {
-			if info.ainfo&1 != 0 && len(info.keywordParams) > 0 {
-				if info.hasKeywordRest {
-					c.failExpr(e, "super forwarding with both named keywords and **rest is not supported yet")
-					return
-				}
+			if info.ainfo&1 != 0 && len(info.keywordParams) > 0 && !info.hasKeywordRest {
 				c.rebuildKeywordHash(s, info)
 			}
 			base := s.alloc(4)
-			aspec := uint32(info.ainfo<<4) & 0xffff
+			aspec := uint32((info.ainfo<<4)|level) & 0xffff
 			s.emit(bytecode.OpARGARY, uint32(base+1), aspec)
 			blockReg := base + 2
 			argInfo := uint32(15)
@@ -1134,7 +1226,7 @@ func (c *Compiler) compileSuper(s *scope, e *frontend.SuperExpr, dst int) {
 		} else if e.BlockArg != nil {
 			c.compileExpr(s, e.BlockArg, base+1)
 		} else {
-			s.emitMove(base+1, info.blockSlot)
+			c.emitMethodSlot(s, base+1, info.blockSlot)
 		}
 		s.emit(bytecode.OpSUPER, uint32(base), 0)
 		s.emitMove(dst, base)
@@ -1142,42 +1234,56 @@ func (c *Compiler) compileSuper(s *scope, e *frontend.SuperExpr, dst int) {
 	}
 
 	n := len(e.Args)
-	hasSplat := false
+	hasPositionalSplat := false
 	for _, arg := range e.Args {
 		if _, ok := arg.(*frontend.SplatArg); ok {
-			hasSplat = true
+			hasPositionalSplat = true
 			break
 		}
 	}
-	if !hasSplat && n > 14 {
+	if !hasPositionalSplat && n > 14 {
 		c.failExpr(e, "too many arguments to super")
 		return
 	}
-	if hasSplat {
-		base := s.alloc(3)
-		c.buildArgArray(s, e.Args, base+1)
-		blockReg := base + 2
-		if e.Block != nil {
-			child := c.compileBlock(s, e.Block)
-			if child == nil {
-				return
-			}
-			index := s.irep.AddChild(child)
-			s.emit(bytecode.OpBLOCK, uint32(blockReg), uint32(index))
-		} else if e.BlockArg != nil {
-			c.compileExpr(s, e.BlockArg, blockReg)
-		} else {
-			s.emitMove(blockReg, info.blockSlot)
+	hasKeywordSplat := false
+	for _, kw := range e.Keywords {
+		if kw.IsSplat() {
+			hasKeywordSplat = true
+			break
 		}
-		s.emit(bytecode.OpSUPER, uint32(base), 15)
-		s.emitMove(dst, base)
-		return
 	}
-	base := s.alloc(1 + n + 1)
-	for i, arg := range e.Args {
-		c.compileExpr(s, arg, base+1+i)
+	keywordHash := hasKeywordSplat || len(e.Keywords) > 14
+	keywordCount := len(e.Keywords)
+	if keywordHash {
+		keywordCount = 15
 	}
-	blockReg := base + 1 + n
+	keywordRegs := keywordCount * 2
+	if keywordHash {
+		keywordRegs = 1
+	}
+	positionalRegs := n
+	if hasPositionalSplat {
+		positionalRegs = 1
+	}
+
+	base := s.alloc(1 + positionalRegs + keywordRegs + 1)
+	if hasPositionalSplat {
+		c.buildArgArray(s, e.Args, base+1)
+	} else {
+		for i, arg := range e.Args {
+			c.compileExpr(s, arg, base+1+i)
+		}
+	}
+	keywordBase := base + 1 + positionalRegs
+	if keywordHash {
+		c.compileKeywordHash(s, e.Keywords, keywordBase)
+	} else {
+		for i, kw := range e.Keywords {
+			c.compileExpr(s, kw.Key, keywordBase+2*i)
+			c.compileExpr(s, kw.Value, keywordBase+2*i+1)
+		}
+	}
+	blockReg := keywordBase + keywordRegs
 	if e.Block != nil {
 		child := c.compileBlock(s, e.Block)
 		if child == nil {
@@ -1188,9 +1294,14 @@ func (c *Compiler) compileSuper(s *scope, e *frontend.SuperExpr, dst int) {
 	} else if e.BlockArg != nil {
 		c.compileExpr(s, e.BlockArg, blockReg)
 	} else {
-		s.emitMove(blockReg, info.blockSlot)
+		c.emitMethodSlot(s, blockReg, info.blockSlot)
 	}
-	s.emit(bytecode.OpSUPER, uint32(base), uint32(n))
+	positionalInfo := uint32(n)
+	if hasPositionalSplat {
+		positionalInfo = 15
+	}
+	argInfo := positionalInfo | uint32(keywordCount)<<4
+	s.emit(bytecode.OpSUPER, uint32(base), argInfo)
 	s.emitMove(dst, base)
 }
 
@@ -1215,21 +1326,29 @@ func (c *Compiler) compileYield(s *scope, e *frontend.YieldExpr, dst int) {
 }
 
 func (c *Compiler) rebuildKeywordHash(s *scope, info *methodInfo) {
-	if info.keywordSlot < 0 || len(info.keywordParams) == 0 {
+	if info.keywordSlot < 0 || len(info.keywordParams) == 0 || s.method == nil {
 		return
 	}
 	sp0 := s.sp
 	base := s.alloc(len(info.keywordParams) * 2)
 	for i, param := range info.keywordParams {
 		s.emit(bytecode.OpLOADSYM, uint32(base+2*i), s.sym(param.Name))
-		slot, ok := s.locals[param.Name]
+		slot, ok := s.method.locals[param.Name]
 		if !ok {
 			c.fail(param.Pos, "compiler: unknown keyword parameter %q", param.Name)
 			return
 		}
-		s.emitMove(base+2*i+1, slot)
+		c.emitMethodSlot(s, base+2*i+1, slot)
 	}
 	s.emit(bytecode.OpHASH, uint32(base), uint32(len(info.keywordParams)))
-	s.emitMove(info.keywordSlot, base)
+	c.emitMethodSlotSet(s, base, info.keywordSlot)
 	s.sp = sp0
+}
+
+func (c *Compiler) emitMethodSlotSet(s *scope, src, slot int) {
+	if s.yieldLevel == 0 {
+		s.emitMove(slot, src)
+		return
+	}
+	s.emit(bytecode.OpSETUPVAR, uint32(src), uint32(slot), uint32(s.yieldLevel-1))
 }

@@ -11,19 +11,21 @@ English summary.
 - [x] Prism lowering and located errors
 - [x] Scalar expressions, locals, closures, globals, constants
 - [x] Conditionals, loops, `case`/`when`, `break`, `next`
-- [x] Methods with required/optional/rest parameters
+- [x] Methods with required/optional/post/rest/keyword parameters
+- [x] Argument forwarding, anonymous block forwarding, numbered parameters
 - [x] Blocks, `yield`, and `return`
 - [x] Arrays, hashes, ranges, string interpolation
 - [x] Classes, modules, instance and class variables, constants
 - [x] Inheritance, `super`, class and singleton methods, `class << self`
-- [x] Keyword arguments, splats, block arguments
+- [x] Keyword arguments, splats, block arguments, and their combinations
 - [x] Lambdas and procs
-- [x] Multiple assignment (including splat targets)
-- [x] `for` loops
+- [x] Multiple assignment (including index/attribute and splat targets)
+- [x] `for` loops (including destructuring)
 - [x] `raise`, `begin` / `rescue` / `ensure`, `retry`, `redo`
 - [x] `alias` / `undef`
 - [x] Debug information (`-g`, LVAR/DBG)
 - [x] Pattern matching (value, variable, capture, array, guard, pin)
+- [x] Operator assignment on locals, globals, ivars, cvars, attributes, index
 - [ ] Optimized opcodes
 
 ## M0 - Parser integration

@@ -120,7 +120,10 @@ func dumpExpr(w io.Writer, expr Expr, depth int) error {
 		}
 		return dumpBody(w, e.Body, depth+1)
 	case *ForExpr:
-		fmt.Fprintf(w, "%sfor %s\n", prefix, e.Target.Name)
+		fmt.Fprintf(w, "%sfor %v\n", prefix, multiTargetNames(e.Targets))
+		if e.Rest != nil {
+			fmt.Fprintf(w, "%s  rest %s\n", prefix, e.Rest.Name)
+		}
 		fmt.Fprintf(w, "%s  collection\n", prefix)
 		if err := dumpExpr(w, e.Collection, depth+2); err != nil {
 			return err
@@ -229,17 +232,18 @@ func dumpExpr(w io.Writer, expr Expr, depth int) error {
 			}
 		}
 		for _, pair := range e.Keywords {
+			if pair.IsSplat() {
+				fmt.Fprintf(w, "%s  keyword-splat\n", prefix)
+				if err := dumpExpr(w, pair.Value, depth+2); err != nil {
+					return err
+				}
+				continue
+			}
 			fmt.Fprintf(w, "%s  keyword\n", prefix)
 			if err := dumpExpr(w, pair.Key, depth+2); err != nil {
 				return err
 			}
 			if err := dumpExpr(w, pair.Value, depth+2); err != nil {
-				return err
-			}
-		}
-		if e.KeywordSplat != nil {
-			fmt.Fprintf(w, "%s  keyword-splat\n", prefix)
-			if err := dumpExpr(w, e.KeywordSplat, depth+2); err != nil {
 				return err
 			}
 		}
@@ -367,6 +371,21 @@ func dumpExpr(w io.Writer, expr Expr, depth int) error {
 		fmt.Fprintf(w, "%sunknown %T\n", prefix, expr)
 	}
 	return nil
+}
+
+func multiTargetNames(targets []MultiTarget) []string {
+	names := make([]string, len(targets))
+	for i, target := range targets {
+		switch target.Kind {
+		case TargetLocal, TargetGlobal, TargetInstance, TargetConstant:
+			names[i] = target.Name
+		case TargetIndex, TargetCall:
+			names[i] = "<target>"
+		default:
+			names[i] = "?"
+		}
+	}
+	return names
 }
 
 func patternDescription(pattern Pattern) string {

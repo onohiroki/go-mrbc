@@ -96,6 +96,7 @@ func (c *Compiler) compileMethod(parent *scope, def *frontend.DefExpr) *bytecode
 		ainfo:       ainfo,
 		blockSlot:   s.blockSlot,
 		keywordSlot: s.keywordSlot,
+		restSlot:    s.restSlot,
 	}
 	for _, param := range s.params {
 		switch param.Kind {

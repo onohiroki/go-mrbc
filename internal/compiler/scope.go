@@ -24,6 +24,7 @@ type methodInfo struct {
 	ainfo          int
 	blockSlot      int
 	keywordSlot    int
+	restSlot       int
 	keywordParams  []frontend.Param
 	hasKeywordRest bool
 }
@@ -63,6 +64,7 @@ type scope struct {
 
 	blockSlot   int
 	keywordSlot int
+	restSlot    int
 	forDepth    int
 
 	rescue     *rescueContext
@@ -87,6 +89,7 @@ func (c *Compiler) newScope(parent *scope, kind scopeKind, params []frontend.Par
 		params:      params,
 		blockSlot:   -1,
 		keywordSlot: -1,
+		restSlot:    -1,
 	}
 
 	if parent != nil {
@@ -160,10 +163,20 @@ func (s *scope) initLocals(locals []string) error {
 	for i := range s.params {
 		param := &s.params[i]
 		switch param.Kind {
-		case frontend.ParamRequired, frontend.ParamOptional, frontend.ParamRest:
+		case frontend.ParamRequired, frontend.ParamOptional, frontend.ParamPost:
 			if err := add(param.Name); err != nil {
 				return err
 			}
+			positional++
+		case frontend.ParamRest:
+			slot := next
+			if param.Name != "" {
+				if err := bind(param.Name, slot); err != nil {
+					return err
+				}
+			}
+			s.restSlot = slot
+			next++
 			positional++
 		case frontend.ParamKeyword, frontend.ParamOptionalKeyword:
 			hasKeywords = true
@@ -181,14 +194,16 @@ func (s *scope) initLocals(locals []string) error {
 			s.keywordSlot = keywordSlot
 			next = keywordSlot + 1
 			if keywordRest != nil {
-				if err := bind(keywordRest.Name, keywordSlot); err != nil {
-					return err
+				if keywordRest.Name != "" {
+					if err := bind(keywordRest.Name, keywordSlot); err != nil {
+						return err
+					}
 				}
 			}
 			blockSlot := keywordSlot + 1
 			s.blockSlot = blockSlot
 			next = blockSlot + 1
-			if blockParam != nil {
+			if blockParam != nil && blockParam.Name != "" {
 				if err := bind(blockParam.Name, blockSlot); err != nil {
 					return err
 				}
@@ -205,7 +220,7 @@ func (s *scope) initLocals(locals []string) error {
 			blockSlot := 1 + positional
 			s.blockSlot = blockSlot
 			next = blockSlot + 1
-			if blockParam != nil {
+			if blockParam != nil && blockParam.Name != "" {
 				if err := bind(blockParam.Name, blockSlot); err != nil {
 					return err
 				}
@@ -352,6 +367,8 @@ func (s *scope) enterAspec() (uint32, int) {
 			opt++
 		case frontend.ParamRest:
 			rest = 1
+		case frontend.ParamPost:
+			post++
 		case frontend.ParamKeyword, frontend.ParamOptionalKeyword:
 			keywords++
 		case frontend.ParamKeywordRest:

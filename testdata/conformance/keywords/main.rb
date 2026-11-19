@@ -21,3 +21,34 @@ l.call(x: 3, y: 4)
   puts v
   puts w
 end
+
+def ks(*a, k: 1, **rest)
+  puts a.length
+  puts k
+  puts rest.length
+end
+arr = [1, 2]
+h = { k: 7, z: 8 }
+ks(*arr, k: 5)
+ks(*arr, **h)
+ks(**h, k: 9)
+
+class KA
+  def initialize(a, k:, **rest)
+    puts a
+    puts k
+    puts rest.length
+  end
+end
+class KB < KA
+  def initialize(a)
+    super(a, k: 6, z: 2)
+  end
+end
+KB.new(8)
+class KC < KA
+  def initialize(a)
+    super(*[a], k: 7)
+  end
+end
+KC.new(9)

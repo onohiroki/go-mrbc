@@ -295,6 +295,39 @@ func (l *lowerer) lowerExpr(node parser.Node) (Expr, error) {
 			return nil, err
 		}
 		return &ConstantWrite{exprBase: base(pos), Name: n.Name, Value: value}, nil
+	case *parser.ConstantOperatorWriteNode:
+		value, err := l.lowerExpr(n.Value)
+		if err != nil {
+			return nil, err
+		}
+		read := &ConstantRead{exprBase: base(pos), Name: n.Name}
+		return &ConstantWrite{
+			exprBase: base(pos),
+			Name:     n.Name,
+			Value:    l.binaryAssign(read, n.BinaryOperator, value, pos, func(v Expr) Expr { return v }),
+		}, nil
+	case *parser.ConstantAndWriteNode:
+		value, err := l.lowerExpr(n.Value)
+		if err != nil {
+			return nil, err
+		}
+		read := &ConstantRead{exprBase: base(pos), Name: n.Name}
+		return &AndExpr{
+			exprBase: base(pos),
+			Left:     read,
+			Right:    &ConstantWrite{exprBase: base(pos), Name: n.Name, Value: value},
+		}, nil
+	case *parser.ConstantOrWriteNode:
+		value, err := l.lowerExpr(n.Value)
+		if err != nil {
+			return nil, err
+		}
+		read := &ConstantRead{exprBase: base(pos), Name: n.Name}
+		return &OrExpr{
+			exprBase: base(pos),
+			Left:     read,
+			Right:    &ConstantWrite{exprBase: base(pos), Name: n.Name, Value: value},
+		}, nil
 
 	case *parser.InstanceVariableReadNode:
 		return &InstanceRead{exprBase: base(pos), Name: n.Name}, nil
@@ -546,6 +579,88 @@ func (l *lowerer) lowerExpr(node parser.Node) (Expr, error) {
 		}
 		return &OrExpr{exprBase: base(pos), Left: left, Right: right}, nil
 
+	case *parser.IndexOperatorWriteNode:
+		receiver, args, err := l.lowerIndexParts(n.Receiver, n.Arguments, n.Block)
+		if err != nil {
+			return nil, err
+		}
+		value, err := l.lowerExpr(n.Value)
+		if err != nil {
+			return nil, err
+		}
+		read := &Call{exprBase: base(pos), Receiver: receiver, Name: "[]", Args: args}
+		return l.binaryAssign(read, n.BinaryOperator, value, pos, func(v Expr) Expr {
+			writeArgs := append(append([]Expr{}, args...), v)
+			return &Call{exprBase: base(pos), Receiver: receiver, Name: "[]=", Args: writeArgs}
+		}), nil
+	case *parser.IndexAndWriteNode:
+		receiver, args, err := l.lowerIndexParts(n.Receiver, n.Arguments, n.Block)
+		if err != nil {
+			return nil, err
+		}
+		value, err := l.lowerExpr(n.Value)
+		if err != nil {
+			return nil, err
+		}
+		read := &Call{exprBase: base(pos), Receiver: receiver, Name: "[]", Args: args}
+		return l.binaryAssign(read, "&&", value, pos, func(v Expr) Expr {
+			writeArgs := append(append([]Expr{}, args...), v)
+			return &Call{exprBase: base(pos), Receiver: receiver, Name: "[]=", Args: writeArgs}
+		}), nil
+	case *parser.IndexOrWriteNode:
+		receiver, args, err := l.lowerIndexParts(n.Receiver, n.Arguments, n.Block)
+		if err != nil {
+			return nil, err
+		}
+		value, err := l.lowerExpr(n.Value)
+		if err != nil {
+			return nil, err
+		}
+		read := &Call{exprBase: base(pos), Receiver: receiver, Name: "[]", Args: args}
+		return l.binaryAssign(read, "||", value, pos, func(v Expr) Expr {
+			writeArgs := append(append([]Expr{}, args...), v)
+			return &Call{exprBase: base(pos), Receiver: receiver, Name: "[]=", Args: writeArgs}
+		}), nil
+	case *parser.CallOperatorWriteNode:
+		receiver, err := l.lowerExpr(n.Receiver)
+		if err != nil {
+			return nil, err
+		}
+		value, err := l.lowerExpr(n.Value)
+		if err != nil {
+			return nil, err
+		}
+		read := &Call{exprBase: base(pos), Receiver: receiver, Name: n.ReadName}
+		return l.binaryAssign(read, n.BinaryOperator, value, pos, func(v Expr) Expr {
+			return &Call{exprBase: base(pos), Receiver: receiver, Name: n.WriteName, Args: []Expr{v}}
+		}), nil
+	case *parser.CallAndWriteNode:
+		receiver, err := l.lowerExpr(n.Receiver)
+		if err != nil {
+			return nil, err
+		}
+		value, err := l.lowerExpr(n.Value)
+		if err != nil {
+			return nil, err
+		}
+		read := &Call{exprBase: base(pos), Receiver: receiver, Name: n.ReadName}
+		return l.binaryAssign(read, "&&", value, pos, func(v Expr) Expr {
+			return &Call{exprBase: base(pos), Receiver: receiver, Name: n.WriteName, Args: []Expr{v}}
+		}), nil
+	case *parser.CallOrWriteNode:
+		receiver, err := l.lowerExpr(n.Receiver)
+		if err != nil {
+			return nil, err
+		}
+		value, err := l.lowerExpr(n.Value)
+		if err != nil {
+			return nil, err
+		}
+		read := &Call{exprBase: base(pos), Receiver: receiver, Name: n.ReadName}
+		return l.binaryAssign(read, "||", value, pos, func(v Expr) Expr {
+			return &Call{exprBase: base(pos), Receiver: receiver, Name: n.WriteName, Args: []Expr{v}}
+		}), nil
+
 	case *parser.CallNode:
 		return l.lowerCall(n)
 
@@ -593,11 +708,9 @@ func (l *lowerer) lowerExpr(node parser.Node) (Expr, error) {
 
 	case *parser.MultiWriteNode:
 		return l.lowerMultiWrite(n)
-	case *parser.ConstantOperatorWriteNode, *parser.ConstantAndWriteNode,
-		*parser.ConstantOrWriteNode, *parser.CallOperatorWriteNode,
-		*parser.CallAndWriteNode, *parser.CallOrWriteNode,
-		*parser.IndexOperatorWriteNode, *parser.IndexAndWriteNode, *parser.IndexOrWriteNode:
-		return nil, l.errorf(n, "operator assignment for this target is not supported yet")
+	case *parser.ConstantPathOperatorWriteNode, *parser.ConstantPathAndWriteNode,
+		*parser.ConstantPathOrWriteNode:
+		return nil, l.errorf(n, "operator assignment for constant paths is not supported yet")
 
 	case *parser.ClassNode:
 		return l.lowerClass(n)
@@ -986,13 +1099,18 @@ func (l *lowerer) lowerParameters(params *parser.ParametersNode) ([]Param, error
 		if !ok {
 			return nil, l.unsupported(params.Rest)
 		}
-		if rest.Name == nil {
-			return nil, l.errorf(rest, "anonymous rest parameters are not supported yet")
+		name := ""
+		if rest.Name != nil {
+			name = *rest.Name
 		}
-		out = append(out, Param{Pos: l.pos(rest), Name: *rest.Name, Kind: ParamRest})
+		out = append(out, Param{Pos: l.pos(rest), Name: name, Kind: ParamRest})
 	}
-	if len(params.Posts) > 0 {
-		return nil, l.errorf(params.Posts[0], "post parameters are not supported yet")
+	for _, node := range params.Posts {
+		post, ok := node.(*parser.RequiredParameterNode)
+		if !ok {
+			return nil, l.unsupported(node)
+		}
+		out = append(out, Param{Pos: l.pos(node), Name: post.Name, Kind: ParamPost})
 	}
 	for _, node := range params.Keywords {
 		switch keyword := node.(type) {
@@ -1014,22 +1132,43 @@ func (l *lowerer) lowerParameters(params *parser.ParametersNode) ([]Param, error
 		}
 	}
 	if params.KeywordRest != nil {
-		rest, ok := params.KeywordRest.(*parser.KeywordRestParameterNode)
-		if !ok {
+		switch rest := params.KeywordRest.(type) {
+		case *parser.ForwardingParameterNode:
+			out = append(out,
+				Param{Pos: l.pos(rest), Kind: ParamRest},
+				Param{Pos: l.pos(rest), Kind: ParamKeywordRest},
+				Param{Pos: l.pos(rest), Kind: ParamBlock},
+			)
+		case *parser.KeywordRestParameterNode:
+			name := ""
+			if rest.Name != nil {
+				name = *rest.Name
+			}
+			out = append(out, Param{Pos: l.pos(rest), Name: name, Kind: ParamKeywordRest})
+		default:
 			return nil, l.unsupported(params.KeywordRest)
 		}
-		if rest.Name == nil {
-			return nil, l.errorf(rest, "anonymous keyword rest parameters are not supported yet")
-		}
-		out = append(out, Param{Pos: l.pos(rest), Name: *rest.Name, Kind: ParamKeywordRest})
 	}
 	if params.Block != nil {
-		if params.Block.Name == nil {
-			return nil, l.errorf(params.Block, "anonymous block parameters are not supported yet")
+		name := ""
+		if params.Block.Name != nil {
+			name = *params.Block.Name
 		}
-		out = append(out, Param{Pos: l.pos(params.Block), Name: *params.Block.Name, Kind: ParamBlock})
+		out = append(out, Param{Pos: l.pos(params.Block), Name: name, Kind: ParamBlock})
 	}
 	return out, nil
+}
+
+func (l *lowerer) binaryAssign(read Expr, op string, value Expr, pos Position, write func(Expr) Expr) Expr {
+	switch op {
+	case "||":
+		return &OrExpr{exprBase: base(pos), Left: read, Right: write(value)}
+	case "&&":
+		return &AndExpr{exprBase: base(pos), Left: read, Right: write(value)}
+	default:
+		computed := &Call{exprBase: base(pos), Receiver: read, Name: op, Args: []Expr{value}}
+		return write(computed)
+	}
 }
 
 func (l *lowerer) lowerCall(n *parser.CallNode) (Expr, error) {
@@ -1044,7 +1183,7 @@ func (l *lowerer) lowerCall(n *parser.CallNode) (Expr, error) {
 			return nil, err
 		}
 	}
-	args, keywords, keywordSplat, blockArg, err := l.lowerCallParts(n.Arguments)
+	args, keywords, blockArg, forwardAll, err := l.lowerCallParts(n.Arguments)
 	if err != nil {
 		return nil, err
 	}
@@ -1058,41 +1197,42 @@ func (l *lowerer) lowerCall(n *parser.CallNode) (Expr, error) {
 		}
 	case *parser.BlockArgumentNode:
 		if b.Expression == nil {
-			return nil, l.errorf(b, "anonymous block forwarding is not supported yet")
-		}
-		blockArg, err = l.lowerExpr(b.Expression)
-		if err != nil {
-			return nil, err
+			blockArg = &BlockSlotExpr{exprBase: base(l.pos(b))}
+		} else {
+			blockArg, err = l.lowerExpr(b.Expression)
+			if err != nil {
+				return nil, err
+			}
 		}
 	default:
 		return nil, l.errorf(n.Block, "block argument forwarding is not supported yet")
 	}
 	return &Call{
-		exprBase:     base(l.pos(n)),
-		Receiver:     receiver,
-		Name:         n.Name,
-		Args:         args,
-		Keywords:     keywords,
-		KeywordSplat: keywordSplat,
-		Block:        block,
-		BlockArg:     blockArg,
+		exprBase:   base(l.pos(n)),
+		Receiver:   receiver,
+		Name:       n.Name,
+		Args:       args,
+		Keywords:   keywords,
+		ForwardAll: forwardAll,
+		Block:      block,
+		BlockArg:   blockArg,
 	}, nil
 }
 
-func (l *lowerer) lowerCallParts(args *parser.ArgumentsNode) ([]Expr, []HashPair, Expr, Expr, error) {
+func (l *lowerer) lowerCallParts(args *parser.ArgumentsNode) ([]Expr, []KeywordArg, Expr, bool, error) {
 	if args == nil {
-		return nil, nil, nil, nil, nil
+		return nil, nil, nil, false, nil
 	}
 	var positional []Expr
-	var keywords []HashPair
-	var keywordSplat Expr
+	var keywords []KeywordArg
 	var blockArg Expr
+	forwardAll := false
 	for _, node := range args.Arguments {
 		switch arg := node.(type) {
 		case *parser.SplatNode:
 			value, err := l.lowerExpr(arg.Expression)
 			if err != nil {
-				return nil, nil, nil, nil, err
+				return nil, nil, nil, false, err
 			}
 			positional = append(positional, &SplatArg{exprBase: base(l.pos(node)), Value: value})
 		case *parser.KeywordHashNode:
@@ -1101,49 +1241,47 @@ func (l *lowerer) lowerCallParts(args *parser.ArgumentsNode) ([]Expr, []HashPair
 				case *parser.AssocNode:
 					symbol, ok := entry.Key.(*parser.SymbolNode)
 					if !ok {
-						return nil, nil, nil, nil, l.errorf(entry.Key, "only symbol keyword arguments are supported")
+						return nil, nil, nil, false, l.errorf(entry.Key, "only symbol keyword arguments are supported")
 					}
 					value, err := l.lowerExpr(entry.Value)
 					if err != nil {
-						return nil, nil, nil, nil, err
+						return nil, nil, nil, false, err
 					}
-					keywords = append(keywords, HashPair{
+					keywords = append(keywords, KeywordArg{
 						Key:   &SymbolLiteral{exprBase: base(l.pos(entry.Key)), Value: symbol.Unescaped.Value},
 						Value: value,
 					})
 				case *parser.AssocSplatNode:
-					if keywordSplat != nil {
-						return nil, nil, nil, nil, l.errorf(entry, "multiple keyword splats are not supported")
-					}
 					value, err := l.lowerExpr(entry.Value)
 					if err != nil {
-						return nil, nil, nil, nil, err
+						return nil, nil, nil, false, err
 					}
-					keywordSplat = value
+					keywords = append(keywords, KeywordArg{Value: value})
 				default:
-					return nil, nil, nil, nil, l.unsupported(element)
+					return nil, nil, nil, false, l.unsupported(element)
 				}
 			}
 		case *parser.BlockArgumentNode:
 			if arg.Expression == nil {
-				return nil, nil, nil, nil, l.errorf(arg, "anonymous block forwarding is not supported yet")
+				blockArg = &BlockSlotExpr{exprBase: base(l.pos(arg))}
+			} else {
+				value, err := l.lowerExpr(arg.Expression)
+				if err != nil {
+					return nil, nil, nil, false, err
+				}
+				blockArg = value
 			}
-			value, err := l.lowerExpr(arg.Expression)
-			if err != nil {
-				return nil, nil, nil, nil, err
-			}
-			blockArg = value
 		case *parser.ForwardingArgumentsNode:
-			return nil, nil, nil, nil, l.errorf(node, "argument forwarding is not supported yet")
+			forwardAll = true
 		default:
 			expr, err := l.lowerExpr(node)
 			if err != nil {
-				return nil, nil, nil, nil, err
+				return nil, nil, nil, false, err
 			}
 			positional = append(positional, expr)
 		}
 	}
-	return positional, keywords, keywordSplat, blockArg, nil
+	return positional, keywords, blockArg, forwardAll, nil
 }
 
 func (l *lowerer) lowerClass(n *parser.ClassNode) (Expr, error) {
@@ -1250,12 +1388,31 @@ func (l *lowerer) lowerLambda(n *parser.LambdaNode) (Expr, error) {
 }
 
 func (l *lowerer) lowerSuper(n *parser.SuperNode) (Expr, error) {
-	args, keywords, keywordSplat, blockArg, err := l.lowerCallParts(n.Arguments)
+	args, keywords, blockArg, forwardAll, err := l.lowerCallParts(n.Arguments)
 	if err != nil {
 		return nil, err
 	}
-	if len(keywords) > 0 || keywordSplat != nil {
-		return nil, l.errorf(n, "keyword arguments to super are not supported yet")
+	if forwardAll {
+		if len(args) > 0 || len(keywords) > 0 {
+			return nil, l.errorf(n, "argument forwarding in super cannot be combined with other arguments")
+		}
+		var block *Block
+		if n.Block != nil {
+			blockNode, ok := n.Block.(*parser.BlockNode)
+			if !ok {
+				return nil, l.errorf(n.Block, "block argument forwarding is not supported yet")
+			}
+			block, err = l.lowerBlock(blockNode)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return &SuperExpr{
+			exprBase:   base(l.pos(n)),
+			Forwarding: true,
+			Block:      block,
+			BlockArg:   blockArg,
+		}, nil
 	}
 	var block *Block
 	if n.Block != nil {
@@ -1271,6 +1428,7 @@ func (l *lowerer) lowerSuper(n *parser.SuperNode) (Expr, error) {
 	return &SuperExpr{
 		exprBase: base(l.pos(n)),
 		Args:     args,
+		Keywords: keywords,
 		Block:    block,
 		BlockArg: blockArg,
 	}, nil
@@ -1346,13 +1504,40 @@ func (l *lowerer) lowerMultiTarget(node parser.Node) (MultiTarget, error) {
 		return MultiTarget{Pos: pos, Kind: TargetInstance, Name: target.Name}, nil
 	case *parser.ConstantTargetNode:
 		return MultiTarget{Pos: pos, Kind: TargetConstant, Name: target.Name}, nil
+	case *parser.IndexTargetNode:
+		receiver, args, err := l.lowerIndexParts(target.Receiver, target.Arguments, target.Block)
+		if err != nil {
+			return MultiTarget{}, err
+		}
+		return MultiTarget{Pos: pos, Kind: TargetIndex, Receiver: receiver, Args: args}, nil
+	case *parser.CallTargetNode:
+		receiver, err := l.lowerExpr(target.Receiver)
+		if err != nil {
+			return MultiTarget{}, err
+		}
+		return MultiTarget{Pos: pos, Kind: TargetCall, Name: target.Name, Receiver: receiver}, nil
 	default:
 		return MultiTarget{}, l.errorf(node, "unsupported multiple assignment target: %s", nodeName(node))
 	}
 }
 
+func (l *lowerer) lowerIndexParts(receiverNode parser.Node, arguments *parser.ArgumentsNode, block *parser.BlockArgumentNode) (Expr, []Expr, error) {
+	if block != nil {
+		return nil, nil, l.errorf(block, "block arguments in index assignment are not supported")
+	}
+	receiver, err := l.lowerExpr(receiverNode)
+	if err != nil {
+		return nil, nil, err
+	}
+	args, err := l.lowerArguments(arguments)
+	if err != nil {
+		return nil, nil, err
+	}
+	return receiver, args, nil
+}
+
 func (l *lowerer) lowerFor(n *parser.ForNode) (Expr, error) {
-	target, err := l.lowerMultiTarget(n.Index)
+	targets, rest, posts, err := l.lowerForTargets(n.Index)
 	if err != nil {
 		return nil, err
 	}
@@ -1366,10 +1551,54 @@ func (l *lowerer) lowerFor(n *parser.ForNode) (Expr, error) {
 	}
 	return &ForExpr{
 		exprBase:   base(l.pos(n)),
-		Target:     target,
+		Targets:    targets,
+		Rest:       rest,
+		Posts:      posts,
 		Collection: collection,
 		Body:       body,
 	}, nil
+}
+
+func (l *lowerer) lowerForTargets(node parser.Node) ([]MultiTarget, *MultiTarget, []MultiTarget, error) {
+	multi, ok := node.(*parser.MultiTargetNode)
+	if !ok {
+		target, err := l.lowerMultiTarget(node)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		return []MultiTarget{target}, nil, nil, nil
+	}
+	targets := make([]MultiTarget, 0, len(multi.Lefts))
+	for _, left := range multi.Lefts {
+		target, err := l.lowerMultiTarget(left)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		targets = append(targets, target)
+	}
+	var rest *MultiTarget
+	if multi.Rest != nil {
+		splat, ok := multi.Rest.(*parser.SplatNode)
+		if !ok {
+			return nil, nil, nil, l.unsupported(multi.Rest)
+		}
+		if splat.Expression != nil {
+			target, err := l.lowerMultiTarget(splat.Expression)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			rest = &target
+		}
+	}
+	posts := make([]MultiTarget, 0, len(multi.Rights))
+	for _, right := range multi.Rights {
+		target, err := l.lowerMultiTarget(right)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		posts = append(posts, target)
+	}
+	return targets, rest, posts, nil
 }
 
 func (l *lowerer) lowerBlockParameters(node parser.Node) ([]Param, []string, error) {
@@ -1388,8 +1617,14 @@ func (l *lowerer) lowerBlockParameters(node parser.Node) ([]Param, []string, err
 			}
 		}
 		return lowered, locals, nil
-	case *parser.NumberedParametersNode, *parser.ItParametersNode:
-		return nil, nil, l.errorf(node, "numbered block parameters are not supported yet")
+	case *parser.NumberedParametersNode:
+		lowered := make([]Param, 0, params.Maximum)
+		for i := uint32(1); i <= uint32(params.Maximum); i++ {
+			lowered = append(lowered, Param{Pos: l.pos(node), Name: fmt.Sprintf("_%d", i), Kind: ParamRequired})
+		}
+		return lowered, nil, nil
+	case *parser.ItParametersNode:
+		return nil, nil, l.errorf(node, "the 'it' block parameter is not supported yet")
 	default:
 		return nil, nil, l.unsupported(node)
 	}

@@ -111,16 +111,25 @@ type ConstantRead struct {
 	Name string
 }
 
+// KeywordArg is one keyword argument. A nil Key denotes a keyword splat;
+// Value then holds the hash expression.
+type KeywordArg struct {
+	Key   Expr
+	Value Expr
+}
+
+func (k KeywordArg) IsSplat() bool { return k.Key == nil }
+
 // Call is a method call. A nil Receiver means an implicit-self call.
 type Call struct {
 	exprBase
-	Receiver     Expr
-	Name         string
-	Args         []Expr // may contain *SplatArg
-	Keywords     []HashPair
-	KeywordSplat Expr
-	Block        *Block
-	BlockArg     Expr
+	Receiver   Expr
+	Name       string
+	Args       []Expr // may contain *SplatArg
+	Keywords   []KeywordArg
+	ForwardAll bool
+	Block      *Block
+	BlockArg   Expr
 }
 
 func (c *Call) ImplicitSelf() bool { return c.Receiver == nil }
@@ -144,6 +153,7 @@ const (
 	ParamRequired ParamKind = iota
 	ParamOptional
 	ParamRest
+	ParamPost
 	ParamBlock
 	ParamKeyword
 	ParamOptionalKeyword
@@ -290,6 +300,7 @@ type SingletonClassDef struct {
 type SuperExpr struct {
 	exprBase
 	Args       []Expr
+	Keywords   []KeywordArg
 	Forwarding bool
 	Block      *Block
 	BlockArg   Expr
@@ -309,13 +320,17 @@ const (
 	TargetGlobal
 	TargetInstance
 	TargetConstant
+	TargetIndex
+	TargetCall
 )
 
 type MultiTarget struct {
-	Pos   Position
-	Kind  MultiTargetKind
-	Name  string
-	Depth int
+	Pos      Position
+	Kind     MultiTargetKind
+	Name     string
+	Depth    int
+	Receiver Expr
+	Args     []Expr
 }
 
 type MultiWrite struct {
@@ -328,7 +343,9 @@ type MultiWrite struct {
 
 type ForExpr struct {
 	exprBase
-	Target     MultiTarget
+	Targets    []MultiTarget
+	Rest       *MultiTarget
+	Posts      []MultiTarget
 	Collection Expr
 	Body       []Expr
 }
@@ -361,6 +378,11 @@ type AliasExpr struct {
 type UndefExpr struct {
 	exprBase
 	Names []string
+}
+
+// BlockSlotExpr reads the enclosing method's implicit block argument.
+type BlockSlotExpr struct {
+	exprBase
 }
 
 type CaseMatchExpr struct {

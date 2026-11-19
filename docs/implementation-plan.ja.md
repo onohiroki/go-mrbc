@@ -356,42 +356,39 @@ M1 完了時点で「手続き型＋ブロック＋配列/ハッシュ」のマ�
 - `internal/frontend`: Prism AST → 自前 IR、位置付きエラー、IR ダンプ
 - `internal/compiler`:
   - ローカル変数・upvar（`GETUPVAR`/`SETUPVAR`）
-  - ローカル/グローバル/ivars/クラス変数の複合代入（`+=`, `||=`, `&&=`）
+  - ローカル/グローバル/ivars/クラス変数/属性/index の複合代入（`+=`, `||=`, `&&=`）
   - リテラル、配列、ハッシュ、範囲、文字列補間
   - `if/unless/elsif`、`while/until`、`case/when`、`&&/||/!`
-  - `def`（必須・オプショナル・rest・キーワード引数）、`return`
-  - ブロック、`yield`、ブロック引数 `&b`、splat 呼び出し
+  - `def`（必須・オプショナル・post・rest・キーワード引数）、`return`
+  - ブロック、`yield`、ブロック引数 `&b`、無名ブロック転送、splat 呼び出し
+  - 引数転送 `...`、番号付きブロック引数 `_1`
   - `break`/`next`（while/until、ブロック、lambda）
   - `begin/rescue/ensure/else`、catch handler、`retry`、`redo`
   - `alias` / `undef`
   - DBG / LVAR（`-g` で行番号、デフォルトでローカル変数名）
   - パターンマッチ（値・変数・キャプチャ・配列・ガード・pin）
   - `raise`（例外の送出と捕捉）
-  - クラス/モジュール、継承、`super`（通常・zsuper）、クラスメソッド、
-    特異メソッド、`class << self`、ネストしたクラス、`A::B` 形式のクラス定義
+  - クラス/モジュール、継承、`super`（通常・zsuper・ブロック内）、
+    クラスメソッド、特異メソッド、`class << self`、ネストしたクラス、
+    `A::B` 形式のクラス定義
   - インスタンス変数、クラス変数、定数の読み書き、`A::B` 定数参照
-  - キーワード引数（必須・オプショナル・`**rest`）、キーワード hash 呼び出し
+  - キーワード引数（必須・オプショナル・`**rest`）、キーワード hash、
+    splat との併用、`super` へのキーワード引数
   - `lambda` / `proc`、ラムダ内の `return` / `next`
-  - 多重代入（ローカル・グローバル・ivars・定数・splat ターゲット）
-  - `for` ループ（単一ターゲット）
+  - 多重代入（ローカル・グローバル・ivars・定数・index・属性・splat）
+  - `for` ループ（分割代入ターゲットを含む）
 - `mrbc` パッケージと `gomrbc` CLI
 - 差分実行テスト（`mrbc --no-optimize` と mruby 4.0.0 をオラクルに使用）
 - 適合コーパス `testdata/conformance/`
 
 ### 現時点の制限
 
-- `break`/`next` は while/until、ブロック、lambda で利用可能
 - `yield` はメソッド本体と、そのメソッド内のブロックから利用可能。
   クラス本体や lambda 内からの `yield` はエラー
-- `for` の分割代入ターゲット（`for a, b in ...`）は未対応
-- 無名ブロック引数の転送 `def f(&); g(&); end` は未対応
-- 1 つの呼び出しでキーワード引数と splat 引数の併用は未対応
-- キーワード splat と明示的なキーワードの併用は未対応
-- `super` への明示的なキーワード引数、および「名前付きキーワード + `**rest`」
-  からの zsuper 転送は未対応
-- 多重代入の index/属性ターゲットは未対応（splat ターゲットは対応）
-- 属性・index への複合代入は未対応
-- post 引数、`defined?` は未対応
+- `it` 暗黙ブロック引数は未対応（`_1` は対応）
+- ネストした多重代入ターゲット（`(a, b), c = ...`）は未対応
+- 定数パスへの代入・複合代入（`A::X = 1`, `A::X += 1`）は未対応
+- `defined?` は未対応
 - パターンマッチの hash / alternation / find / 配列 rest は未対応
 - `rescue *ERRORS` とグローバル変数の `alias` は未対応
 
