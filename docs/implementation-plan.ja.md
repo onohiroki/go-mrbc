@@ -320,6 +320,7 @@ RBENV_VERSION=mruby-4.0.0 mruby /tmp/basic.mrb
 | M4 | 最適化、パターンマッチ、メタプログラミング系の整備、性能 | 継続 |
 | M5 | mruby 付属テストによるコンパイル一致ハーネスと構文ギャップの解消 | 継続 |
 | M6 | 実行時一致ハーネスと、そこで見つかったコード生成の修正 | 継続 |
+| M7 | 残りのパターン・制御構文・引数まわりの構文 | 継続 |
 
 M1 完了時点で「手続き型＋ブロック＋配列/ハッシュ」のマクロ言語として
 実用になる。M2 でクラスベースの DSL も書けるようになる。
@@ -362,17 +363,21 @@ M1 完了時点で「手続き型＋ブロック＋配列/ハッシュ」のマ�
   - リテラル、配列、ハッシュ、範囲（beginless/endless を含む）、文字列補間
   - 任意精度の整数リテラル（`BIGINT` pool entry）
   - 配列・ハッシュの splat、補間シンボル、xstring、`Rational`/`Imaginary`
-  - `if/unless/elsif`、`while/until`、`case/when`、`&&/||/!`
+  - `if/unless/elsif`、`while/until`（`begin ... end` 形式を含む）、
+    `case/when`（`when *values` を含む）、`&&/||/!`
   - safe navigation `&.`
   - `def`（必須・オプショナル・post・rest・キーワード引数・分割代入パラメータ）、`return`
-  - ブロック、`yield`（splat 引数を含む）、ブロック引数 `&b`、無名ブロック転送、splat 呼び出し
+  - ブロック、`yield`（splat・キーワード引数を含む）、ブロック引数 `&b`、無名ブロック転送、splat 呼び出し
+  - 15 個以上の位置引数を配列に詰めて渡す呼び出し
   - 引数転送 `...`、番号付きブロック引数 `_1`
   - `break`/`next`（while/until、ブロック、lambda）
   - `begin/rescue/ensure/else`、catch handler、`retry`、`redo`
   - `rescue *ERRORS`（splat rescue class）
   - `alias` / `undef`
   - DBG / LVAR（`-g` で行番号、デフォルトでローカル変数名）
-  - パターンマッチ（値・変数・キャプチャ・配列・hash・ガード・pin）
+  - パターンマッチ（値・変数・キャプチャ・配列・配列 rest・find・
+    alternation・hash・ガード・pin）、`value => pattern`、
+    `value in pattern`（拡張）
   - match-write（`/(?<name>...)/ =~ str` によるローカル変数への捕捉）
   - `raise`（例外の送出と捕捉）
   - `__FILE__` / `__LINE__` / `__ENCODING__`、`$1` などの番号付き参照、
@@ -385,18 +390,23 @@ M1 完了時点で「手続き型＋ブロック＋配列/ハッシュ」のマ�
     splat との併用、`super` へのキーワード引数、implicit hash shorthand
   - `lambda` / `proc`、ラムダ内の `return` / `next`
   - 多重代入（ローカル・グローバル・ivars・定数・index・属性・splat・ネスト）
-  - `for` ループ（分割代入ターゲットを含む）
+  - `for` ループ（分割代入ターゲットと、本体内のネストブロックからの
+  ローカル捕捉を含む）
   - 正規表現リテラル（`Regexp.compile` 呼び出しに変換。実行には
     ターゲット VM の `mruby-regexp` が必要）
 - `mrbc` パッケージと `gomrbc` CLI
 - 差分実行テスト（`mrbc --no-optimize` と mruby 4.0.0 をオラクルに使用）
 - 適合コーパス `testdata/conformance/`
 - コンパイル一致ハーネス `cmd/compat`（mruby の `test/` と `mrbgems/` を走査）
-  - 2026-11-19 時点: 237 ファイル中、両方成功 234、`mrbc` のみ成功 0、
-    両方失敗 3（mruby のパーサが拒否するファイル）
+  - mruby 4.0.0 タグ: 153 ファイル中、両方成功 152、
+    `&nil` 仮引数のため 1 件のみ未対応
+  - 開発ツリー（`4.0.0-3011-gdbab56510`）: 237 ファイル中、
+    両方成功 234、`go-mrbc` のみ成功 1、両方失敗 2
 - 実行時一致ハーネス `cmd/runtimecompat`（`assert.rb` を前置して実行）
-  - 2026-11-19 時点: 実行可能 160 ファイル中、一致 155（うち両方同位置で
-    タイムアウト 4）、両方コンパイル失敗 3、出力差 2
+  - mruby 4.0.0 タグ: 実行可能 106 ファイル中、一致 105、
+    `&nil` 仮引数のため `syntax.rb` のみコンパイル不可
+  - 開発ツリー（`4.0.0-3011-gdbab56510`）: 実行可能 160 ファイル中、
+    一致 155（うち両方同位置でタイムアウト 4）、両方コンパイル失敗 3、出力差 2
   - 出力差 2 は `go-mrbc` の方が Ruby の意味論に忠実なケース
     （`Integer#+` の再定義、ブロック内 `while` の `rescue` 内 `next`）
 - M6 で修正したコード生成の不具合:
@@ -416,21 +426,20 @@ M1 完了時点で「手続き型＋ブロック＋配列/ハッシュ」のマ�
   クラス本体や lambda 内からの `yield` はエラー
 - `it` 暗黙ブロック引数は未対応（`_1` は対応）。mruby 4.0 自身も
   `it` を未定義メソッド呼び出しとしてコンパイルするため、実行時にも動かない
-- パターンマッチの alternation / find / 配列 rest は未対応
-  （hash パターンと `**rest` は対応）
-- グローバル変数の `alias` は未対応
-- `begin ... end while` / `begin ... end until` は未対応
-- 述語なしの `case/in`（`case; in ...`）は未対応
-- 位置引数としての hash 内 splat（`foo("k" => 1, **h)`）は未対応
-- 動的な定数名は未対応（代入対象の定数パスはリテラルのみ）
-- 正規表現リテラルはコンパイルできるが、`=~` によるマッチ式の lowering は未対応
+- グローバル変数の `alias` は未対応（mruby 4.0 のパーサも拒否する）
+- 述語なしの `case/in`（`case; in ...`）は未対応（mruby 4.0 のパーサも拒否する）
+- 動的な定数名・動的定数パスへの複合代入は未対応
+  （リテラルの定数パスは対応）
+- mruby 固有の `&nil` 仮引数（`def f(&nil)`）は go-ruby-prism が
+  パースできない
+- 正規表現リテラルはコンパイルできるが、実行には `mruby-regexp` が必要
 - 任意精度整数リテラルはコンパイルできるが、実行には `mruby-bigint` が必要
 
 ### 次の作業
 
-1. M7: パターンマッチ拡張（alternation/find/配列 rest）、`begin ... end while`、
-   述語なし `case/in`、動的定数パスへの複合代入
-2. M4: 最適化 opcode、性能
-3. `cmd/compat` と `cmd/runtimecompat` を CI に組み込み、構文・実行時の回帰を検出する
+1. M4: 最適化 opcode、性能
+2. `cmd/compat` と `cmd/runtimecompat` を CI に組み込み、構文・実行時の回帰を検出する
+3. mruby 4.0.0 の `&nil` 仮引数に対応する必要が出た場合は、
+   パーサ側の拡張方法を検討する
 
 M0.5 は M0 と独立しているため、並行して進めてもよい。

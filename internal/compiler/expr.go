@@ -201,6 +201,10 @@ func (c *Compiler) compileExpr(s *scope, expr frontend.Expr, dst int) {
 		c.compileCase(s, e, dst)
 	case *frontend.CaseMatchExpr:
 		c.compileCaseMatch(s, e, dst)
+	case *frontend.MatchRequiredExpr:
+		c.compileMatchRequired(s, e, dst)
+	case *frontend.MatchPredicateExpr:
+		c.compileMatchPredicate(s, e, dst)
 	case *frontend.ForExpr:
 		c.compileFor(s, e, dst)
 	case *frontend.BeginExpr:
@@ -443,19 +447,27 @@ func (c *Compiler) compileIf(s *scope, e *frontend.IfExpr, dst int) {
 }
 
 func (c *Compiler) compileWhile(s *scope, e *frontend.WhileExpr, dst int) {
-	start := s.asm.newLabel()
 	end := s.asm.newLabel()
+	condStart := s.asm.newLabel()
+	bodyStart := s.asm.newLabel()
 
 	s.emit(bytecode.OpLOADNIL, uint32(dst))
-	s.asm.bind(start)
+	if e.DoWhile {
+		s.asm.jmp(bodyStart)
+	}
+	s.asm.bind(condStart)
 	cond := s.alloc(1)
 	c.compileExpr(s, e.Cond, cond)
-	s.asm.jmpIf(bytecode.OpJMPNOT, cond, end)
+	if e.DoWhile {
+		s.asm.jmpIf(bytecode.OpJMPIF, cond, bodyStart)
+		s.asm.jmp(end)
+	} else {
+		s.asm.jmpIf(bytecode.OpJMPNOT, cond, end)
+	}
 
-	info := &loopInfo{breakTarget: end, continueTarget: start, resultReg: dst}
+	info := &loopInfo{breakTarget: end, continueTarget: condStart, resultReg: dst}
 	previous := s.loop
 	s.loop = info
-	bodyStart := s.asm.newLabel()
 	s.asm.bind(bodyStart)
 	prevRedo, prevHasRedo := s.redoTarget, s.hasRedo
 	s.redoTarget, s.hasRedo = bodyStart, true
@@ -464,7 +476,7 @@ func (c *Compiler) compileWhile(s *scope, e *frontend.WhileExpr, dst int) {
 	s.redoTarget, s.hasRedo = prevRedo, prevHasRedo
 	s.loop = previous
 
-	s.asm.jmp(start)
+	s.asm.jmp(condStart)
 	s.asm.bind(end)
 }
 
@@ -481,14 +493,24 @@ func (c *Compiler) compileCase(s *scope, e *frontend.CaseExpr, dst int) {
 		for _, cond := range when.Conds {
 			if subject >= 0 {
 				pair := s.alloc(2)
-				c.compileExpr(s, cond, pair)
+				name := "==="
+				if splat, ok := cond.(*frontend.SplatArg); ok {
+					c.compileExpr(s, splat.Value, pair)
+					name = "__case_eqq"
+				} else {
+					c.compileExpr(s, cond, pair)
+				}
 				s.emitMove(pair+1, subject)
-				s.emit(bytecode.OpSEND, uint32(pair), s.sym("==="), 1)
+				s.emit(bytecode.OpSEND, uint32(pair), s.sym(name), 1)
 				s.asm.jmpIf(bytecode.OpJMPIF, pair, match)
 				s.sp = pair
 			} else {
+				value := cond
+				if splat, ok := cond.(*frontend.SplatArg); ok {
+					value = splat.Value
+				}
 				reg := s.alloc(1)
-				c.compileExpr(s, cond, reg)
+				c.compileExpr(s, value, reg)
 				s.asm.jmpIf(bytecode.OpJMPIF, reg, match)
 				s.sp = reg
 			}
@@ -544,6 +566,41 @@ func (c *Compiler) compileCaseMatch(s *scope, e *frontend.CaseMatchExpr, dst int
 	s.sp = sp0
 }
 
+func (c *Compiler) compileMatchRequired(s *scope, e *frontend.MatchRequiredExpr, dst int) {
+	sp0 := s.sp
+	subject := s.alloc(1)
+	c.compileExpr(s, e.Value, subject)
+	fail := s.asm.newLabel()
+	end := s.asm.newLabel()
+	if !c.compilePattern(s, e.Pattern, subject, fail) {
+		return
+	}
+	s.emitMove(dst, subject)
+	s.asm.jmp(end)
+	s.asm.bind(fail)
+	s.emit(bytecode.OpLOADFALSE, uint32(dst))
+	s.emit(bytecode.OpMATCHERR, uint32(dst))
+	s.asm.bind(end)
+	s.sp = sp0
+}
+
+func (c *Compiler) compileMatchPredicate(s *scope, e *frontend.MatchPredicateExpr, dst int) {
+	sp0 := s.sp
+	subject := s.alloc(1)
+	c.compileExpr(s, e.Value, subject)
+	fail := s.asm.newLabel()
+	end := s.asm.newLabel()
+	if !c.compilePattern(s, e.Pattern, subject, fail) {
+		return
+	}
+	s.emit(bytecode.OpLOADTRUE, uint32(dst))
+	s.asm.jmp(end)
+	s.asm.bind(fail)
+	s.emit(bytecode.OpLOADFALSE, uint32(dst))
+	s.asm.bind(end)
+	s.sp = sp0
+}
+
 func (c *Compiler) compilePattern(s *scope, pat frontend.Pattern, subject int, fail label) bool {
 	switch p := pat.(type) {
 	case *frontend.ValuePattern:
@@ -568,37 +625,21 @@ func (c *Compiler) compilePattern(s *scope, pat frontend.Pattern, subject int, f
 		}
 		return c.assignDirect(s, p.Target, subject)
 	case *frontend.ArrayPattern:
-		if p.Constant != nil {
-			check := &frontend.ValuePattern{Value: p.Constant}
-			if !c.compilePattern(s, check, subject, fail) {
-				return false
-			}
+		return c.compileArrayPattern(s, p, subject, fail)
+	case *frontend.FindPattern:
+		return c.compileFindPattern(s, p, subject, fail)
+	case *frontend.AlternationPattern:
+		success := s.asm.newLabel()
+		next := s.asm.newLabel()
+		if !c.compilePattern(s, p.Left, subject, next) {
+			return false
 		}
-		base := s.sp
-		deconstructed := s.alloc(1)
-		s.emitMove(deconstructed, subject)
-		s.emit(bytecode.OpSEND, uint32(deconstructed), s.sym("deconstruct"), 0)
-		size := s.alloc(1)
-		s.emitMove(size, deconstructed)
-		s.emit(bytecode.OpSEND, uint32(size), s.sym("size"), 0)
-		want := s.alloc(1)
-		c.compileInteger(s, want, int64(len(p.Elements)))
-		s.emit(bytecode.OpSEND, uint32(size), s.sym("=="), 1)
-		s.asm.jmpIf(bytecode.OpJMPNOT, size, fail)
-
-		elementBase := s.sp
-		for i, elementPattern := range p.Elements {
-			s.sp = elementBase
-			element := s.alloc(1)
-			s.emitMove(element, deconstructed)
-			index := s.alloc(1)
-			c.compileInteger(s, index, int64(i))
-			s.emit(bytecode.OpSEND, uint32(element), s.sym("[]"), 1)
-			if !c.compilePattern(s, elementPattern, element, fail) {
-				return false
-			}
+		s.asm.jmp(success)
+		s.asm.bind(next)
+		if !c.compilePattern(s, p.Right, subject, fail) {
+			return false
 		}
-		s.sp = base
+		s.asm.bind(success)
 		return true
 	case *frontend.HashPattern:
 		return c.compileHashPattern(s, p, subject, fail)
@@ -606,6 +647,175 @@ func (c *Compiler) compilePattern(s *scope, pat frontend.Pattern, subject int, f
 		c.failExpr(nil, "compiler: unsupported pattern %T", pat)
 		return false
 	}
+}
+
+func (c *Compiler) compileArrayPattern(s *scope, p *frontend.ArrayPattern, subject int, fail label) bool {
+	if p.Constant != nil {
+		check := &frontend.ValuePattern{Value: p.Constant}
+		if !c.compilePattern(s, check, subject, fail) {
+			return false
+		}
+	}
+	sp0 := s.sp
+	deconstructed := s.alloc(1)
+	s.emitMove(deconstructed, subject)
+	s.emit(bytecode.OpSEND, uint32(deconstructed), s.sym("deconstruct"), 0)
+	size := s.alloc(1)
+	s.emitMove(size, deconstructed)
+	s.emit(bytecode.OpSEND, uint32(size), s.sym("size"), 0)
+
+	minimum := len(p.Requireds) + len(p.Posts)
+	compare := s.alloc(2)
+	s.emitMove(compare, size)
+	c.compileInteger(s, compare+1, int64(minimum))
+	operator := "=="
+	if p.HasRest {
+		operator = ">="
+	}
+	s.emit(bytecode.OpSEND, uint32(compare), s.sym(operator), 1)
+	s.asm.jmpIf(bytecode.OpJMPNOT, compare, fail)
+
+	elementBase := s.sp
+	for i, elementPattern := range p.Requireds {
+		s.sp = elementBase
+		element := c.patternArrayElement(s, deconstructed, i)
+		if !c.compilePattern(s, elementPattern, element, fail) {
+			return false
+		}
+	}
+
+	if p.HasRest {
+		if p.Rest != nil {
+			s.sp = elementBase
+			call := s.alloc(3)
+			s.emitMove(call, deconstructed)
+			c.compileInteger(s, call+1, int64(len(p.Requireds)))
+			c.compileInteger(s, call+2, int64(-len(p.Posts)-1))
+			s.emit(bytecode.OpRANGE_INC, uint32(call+1))
+			s.emit(bytecode.OpSEND, uint32(call), s.sym("[]"), 1)
+			if !c.compilePattern(s, *p.Rest, call, fail) {
+				return false
+			}
+		}
+		for j, elementPattern := range p.Posts {
+			s.sp = elementBase
+			element := c.patternArrayElement(s, deconstructed, -len(p.Posts)+j)
+			if !c.compilePattern(s, elementPattern, element, fail) {
+				return false
+			}
+		}
+	} else {
+		for j, elementPattern := range p.Posts {
+			s.sp = elementBase
+			element := c.patternArrayElement(s, deconstructed, len(p.Requireds)+j)
+			if !c.compilePattern(s, elementPattern, element, fail) {
+				return false
+			}
+		}
+	}
+	s.sp = sp0
+	return true
+}
+
+func (c *Compiler) patternArrayElement(s *scope, deconstructed, index int) int {
+	pair := s.alloc(2)
+	s.emitMove(pair, deconstructed)
+	c.compileInteger(s, pair+1, int64(index))
+	s.emit(bytecode.OpSEND, uint32(pair), s.sym("[]"), 1)
+	return pair
+}
+
+func (c *Compiler) compileFindPattern(s *scope, p *frontend.FindPattern, subject int, fail label) bool {
+	if p.Constant != nil {
+		check := &frontend.ValuePattern{Value: p.Constant}
+		if !c.compilePattern(s, check, subject, fail) {
+			return false
+		}
+	}
+	sp0 := s.sp
+	deconstructed := s.alloc(1)
+	s.emitMove(deconstructed, subject)
+	s.emit(bytecode.OpSEND, uint32(deconstructed), s.sym("deconstruct"), 0)
+	size := s.alloc(1)
+	s.emitMove(size, deconstructed)
+	s.emit(bytecode.OpSEND, uint32(size), s.sym("size"), 0)
+
+	limit := s.alloc(2)
+	s.emitMove(limit, size)
+	c.compileInteger(s, limit+1, int64(len(p.Requireds)))
+	s.emit(bytecode.OpSEND, uint32(limit), s.sym("-"), 1)
+
+	index := s.alloc(1)
+	c.compileInteger(s, index, 0)
+
+	loopBase := s.sp
+	loopLabel := s.asm.newLabel()
+	tryFail := s.asm.newLabel()
+	success := s.asm.newLabel()
+	s.asm.bind(loopLabel)
+
+	s.sp = loopBase
+	compare := s.alloc(2)
+	s.emitMove(compare, index)
+	s.emitMove(compare+1, limit)
+	s.emit(bytecode.OpSEND, uint32(compare), s.sym(">"), 1)
+	s.asm.jmpIf(bytecode.OpJMPIF, compare, fail)
+
+	for offset, elementPattern := range p.Requireds {
+		s.sp = loopBase
+		position := s.alloc(2)
+		s.emitMove(position, index)
+		c.compileInteger(s, position+1, int64(offset))
+		s.emit(bytecode.OpSEND, uint32(position), s.sym("+"), 1)
+		element := s.alloc(2)
+		s.emitMove(element, deconstructed)
+		s.emitMove(element+1, position)
+		s.emit(bytecode.OpSEND, uint32(element), s.sym("[]"), 1)
+		if !c.compilePattern(s, elementPattern, element, tryFail) {
+			return false
+		}
+	}
+
+	if p.Left != nil {
+		s.sp = loopBase
+		call := s.alloc(3)
+		s.emitMove(call, deconstructed)
+		c.compileInteger(s, call+1, 0)
+		s.emitMove(call+2, index)
+		s.emit(bytecode.OpRANGE_EXC, uint32(call+1))
+		s.emit(bytecode.OpSEND, uint32(call), s.sym("[]"), 1)
+		if !c.compilePattern(s, *p.Left, call, fail) {
+			return false
+		}
+	}
+	if p.Right != nil {
+		s.sp = loopBase
+		call := s.alloc(3)
+		s.emitMove(call, deconstructed)
+		s.emitMove(call+1, index)
+		c.compileInteger(s, call+2, int64(len(p.Requireds)))
+		s.emit(bytecode.OpSEND, uint32(call+1), s.sym("+"), 1)
+		c.compileInteger(s, call+2, -1)
+		s.emit(bytecode.OpRANGE_INC, uint32(call+1))
+		s.emit(bytecode.OpSEND, uint32(call), s.sym("[]"), 1)
+		if !c.compilePattern(s, *p.Right, call, fail) {
+			return false
+		}
+	}
+
+	s.asm.jmp(success)
+	s.asm.bind(tryFail)
+	s.sp = loopBase
+	next := s.alloc(2)
+	s.emitMove(next, index)
+	c.compileInteger(s, next+1, 1)
+	s.emit(bytecode.OpSEND, uint32(next), s.sym("+"), 1)
+	s.emitMove(index, next)
+	s.asm.jmp(loopLabel)
+
+	s.asm.bind(success)
+	s.sp = sp0
+	return true
 }
 
 func (c *Compiler) compileHashPattern(s *scope, p *frontend.HashPattern, subject int, fail label) bool {
@@ -953,6 +1163,7 @@ func (c *Compiler) compileForBlock(parent *scope, e *frontend.ForExpr) *bytecode
 	}
 	s.markLine(e.Position())
 	s.forDepth = parent.forDepth + 1
+	s.forScope = true
 
 	aspec, _ := s.enterAspec()
 	s.emit(bytecode.OpENTER, aspec)
@@ -1210,10 +1421,7 @@ func (c *Compiler) compileCallPrepared(s *scope, e *frontend.Call, dst, preRecei
 	}
 
 	n := len(e.Args)
-	if !hasPositionalSplat && n > 14 {
-		c.failExpr(e, "too many arguments (maximum 14)")
-		return
-	}
+	packedArgs := hasPositionalSplat || n > 14
 	keywordHash := hasKeywordSplat || len(e.Keywords) > 14
 	keywordCount := len(e.Keywords)
 	if keywordHash {
@@ -1224,7 +1432,7 @@ func (c *Compiler) compileCallPrepared(s *scope, e *frontend.Call, dst, preRecei
 		keywordRegs = 1
 	}
 	positionalRegs := n
-	if hasPositionalSplat {
+	if packedArgs {
 		positionalRegs = 1
 	}
 	hasBlock := blockIndex >= 0 || e.BlockArg != nil
@@ -1241,7 +1449,7 @@ func (c *Compiler) compileCallPrepared(s *scope, e *frontend.Call, dst, preRecei
 			c.compileExpr(s, e.Receiver, base)
 		}
 	}
-	if hasPositionalSplat {
+	if packedArgs {
 		c.buildArgArray(s, e.Args, base+1)
 	} else {
 		for i, arg := range e.Args {
@@ -1263,7 +1471,7 @@ func (c *Compiler) compileCallPrepared(s *scope, e *frontend.Call, dst, preRecei
 	}
 
 	positionalInfo := uint32(n)
-	if hasPositionalSplat {
+	if packedArgs {
 		positionalInfo = 15
 	}
 	argInfo := positionalInfo | uint32(keywordCount)<<4
@@ -1283,7 +1491,7 @@ func (c *Compiler) compileCallPrepared(s *scope, e *frontend.Call, dst, preRecei
 		// An attribute assignment expression evaluates to the assigned value,
 		// not to the setter method's return value.
 		switch {
-		case hasPositionalSplat:
+		case packedArgs:
 			s.emitMove(dst, base+1)
 		case n > 0:
 			s.emitMove(dst, base+n)
@@ -1499,10 +1707,6 @@ func (c *Compiler) compileSuper(s *scope, e *frontend.SuperExpr, dst int) {
 			break
 		}
 	}
-	if !hasPositionalSplat && n > 14 {
-		c.failExpr(e, "too many arguments to super")
-		return
-	}
 	hasKeywordSplat := false
 	for _, kw := range e.Keywords {
 		if kw.IsSplat() {
@@ -1520,12 +1724,12 @@ func (c *Compiler) compileSuper(s *scope, e *frontend.SuperExpr, dst int) {
 		keywordRegs = 1
 	}
 	positionalRegs := n
-	if hasPositionalSplat {
+	if hasPositionalSplat || n > 14 {
 		positionalRegs = 1
 	}
 
 	base := s.alloc(1 + positionalRegs + keywordRegs + 1)
-	if hasPositionalSplat {
+	if hasPositionalSplat || n > 14 {
 		c.buildArgArray(s, e.Args, base+1)
 	} else {
 		for i, arg := range e.Args {
@@ -1557,7 +1761,7 @@ func (c *Compiler) compileSuper(s *scope, e *frontend.SuperExpr, dst int) {
 		s.emit(bytecode.OpLOADNIL, uint32(blockReg))
 	}
 	positionalInfo := uint32(n)
-	if hasPositionalSplat {
+	if hasPositionalSplat || n > 14 {
 		positionalInfo = 15
 	}
 	argInfo := positionalInfo | uint32(keywordCount)<<4
@@ -1570,11 +1774,6 @@ func (c *Compiler) compileYield(s *scope, e *frontend.YieldExpr, dst int) {
 		c.failExpr(e, "yield outside a method is not supported")
 		return
 	}
-	base := s.alloc(1 + len(e.Args))
-	if len(e.Args) > 14 {
-		c.failExpr(e, "too many yield arguments")
-		return
-	}
 	hasSplat := false
 	for _, arg := range e.Args {
 		if _, ok := arg.(*frontend.SplatArg); ok {
@@ -1582,20 +1781,59 @@ func (c *Compiler) compileYield(s *scope, e *frontend.YieldExpr, dst int) {
 			break
 		}
 	}
+	hasKeywordSplat := false
+	for _, kw := range e.Keywords {
+		if kw.IsSplat() {
+			hasKeywordSplat = true
+			break
+		}
+	}
+
+	n := len(e.Args)
+	packedArgs := hasSplat || n > 14
+	keywordHash := hasKeywordSplat || len(e.Keywords) > 14
+	keywordCount := len(e.Keywords)
+	keywordRegs := keywordCount * 2
+	if keywordHash {
+		keywordCount = 15
+		keywordRegs = 1
+	}
+	positionalRegs := n
+	if packedArgs {
+		positionalRegs = 1
+	}
+
+	base := s.alloc(1 + positionalRegs + keywordRegs)
+	if packedArgs {
+		c.buildArgArray(s, e.Args, base+1)
+	} else {
+		for i, arg := range e.Args {
+			c.compileExpr(s, arg, base+1+i)
+		}
+	}
+	keywordBase := base + 1 + positionalRegs
+	if keywordHash {
+		c.compileKeywordHash(s, e.Keywords, keywordBase)
+	} else {
+		for i, kw := range e.Keywords {
+			c.compileExpr(s, kw.Key, keywordBase+2*i)
+			c.compileExpr(s, kw.Value, keywordBase+2*i+1)
+		}
+	}
+
 	info := s.method.methodInfo
 	aspec := uint32(((info.ainfo << 4) | s.yieldLevel) & 0xffff)
-	if hasSplat {
-		c.buildArgArray(s, e.Args, base+1)
-		s.emit(bytecode.OpBLKPUSH, uint32(base), aspec)
-		s.emit(bytecode.OpSEND, uint32(base), s.sym("call"), 15)
-		s.emitMove(dst, base)
-		return
-	}
-	for i, arg := range e.Args {
-		c.compileExpr(s, arg, base+1+i)
-	}
 	s.emit(bytecode.OpBLKPUSH, uint32(base), aspec)
-	s.emit(bytecode.OpBLKCALL, uint32(base), uint32(len(e.Args)))
+	if packedArgs || len(e.Keywords) > 0 {
+		positionalInfo := uint32(n)
+		if packedArgs {
+			positionalInfo = 15
+		}
+		argInfo := positionalInfo | uint32(keywordCount)<<4
+		s.emit(bytecode.OpSEND, uint32(base), s.sym("call"), argInfo)
+	} else {
+		s.emit(bytecode.OpBLKCALL, uint32(base), uint32(n))
+	}
 	s.emitMove(dst, base)
 }
 

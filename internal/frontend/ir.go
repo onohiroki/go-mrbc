@@ -209,8 +209,9 @@ type IfExpr struct {
 
 type WhileExpr struct {
 	exprBase
-	Cond Expr
-	Body Expr
+	Cond    Expr
+	Body    Expr
+	DoWhile bool
 }
 
 type CaseExpr struct {
@@ -252,7 +253,8 @@ type NextExpr struct {
 
 type YieldExpr struct {
 	exprBase
-	Args []Expr
+	Args     []Expr
+	Keywords []KeywordArg
 }
 
 type AndExpr struct {
@@ -486,8 +488,37 @@ type CapturePattern struct {
 
 type ArrayPattern struct {
 	patternBase
-	Constant Expr
-	Elements []Pattern
+	Constant  Expr
+	Requireds []Pattern
+	Rest      *Pattern
+	HasRest   bool
+	Posts     []Pattern
+}
+
+type FindPattern struct {
+	patternBase
+	Constant  Expr
+	Left      *Pattern
+	Requireds []Pattern
+	Right     *Pattern
+}
+
+type AlternationPattern struct {
+	patternBase
+	Left  Pattern
+	Right Pattern
+}
+
+type MatchRequiredExpr struct {
+	exprBase
+	Value   Expr
+	Pattern Pattern
+}
+
+type MatchPredicateExpr struct {
+	exprBase
+	Value   Expr
+	Pattern Pattern
 }
 
 type HashPatternEntry struct {

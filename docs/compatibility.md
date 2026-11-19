@@ -38,20 +38,23 @@ milestones. Features are enabled as their compiler support lands.
 | Instance and class variables | Supported |
 | Constants (writes, reads, `A::B` reads/writes, and operator assignment) | Supported |
 | Operator assignment (locals, globals, ivars, cvars, attributes, index) | Supported |
-| `if` / `unless` / `elsif` / `while` / `until` | Supported |
-| `case` / `when` | Supported |
+| `if` / `unless` / `elsif` / `while` / `until` (including `begin ... end` forms) | Supported |
+| `case` / `when` (including `when *values`) | Supported |
 | `&&`, `||`, `!` | Supported |
 | Method calls, positional arguments, safe navigation (`&.`) | Supported |
+| Calls with more than 14 positional arguments | Supported (packed array) |
 | `def` with required, optional, post, rest, and keyword parameters | Supported |
 | Destructured parameters (`def f((a, b))`) | Supported |
 | Keyword arguments, splats, and their combinations | Supported |
 | Argument forwarding (`...`) and anonymous block forwarding (`&`) | Supported |
 | Numbered block parameters (`_1`, `_2`, ...) | Supported |
 | Splat arguments and block arguments (`&blk`) | Supported |
-| Blocks and `yield` (including splatted `yield` arguments) | Supported |
+| Blocks and `yield` (including splatted and keyword arguments) | Supported |
 | `break` / `next` (loops, blocks, lambdas) | Supported |
 | `return` with a single value or multiple values | Supported |
 | `raise` | Supported |
+| Rightward pattern matching (`value => pattern`) | Supported |
+| Pattern-matching predicate (`value in pattern`) | Supported extension |
 | Classes, modules, inheritance, `super` (including from blocks) | Supported |
 | Nested classes and `A::B` class definitions | Supported |
 | Class methods, singleton methods, and `class << self` | Supported |
@@ -66,7 +69,7 @@ milestones. Features are enabled as their compiler support lands.
 | `defined?` | Supported |
 | `__FILE__`, `__LINE__`, `__ENCODING__` | Supported |
 | Debug information (`-g`, LVAR/DBG) | Supported |
-| Pattern matching (value, variable, capture, array, hash including `**rest`, guard, pin) | Supported |
+| Pattern matching (value, variable, capture, array, array rest, find, alternation, hash with `**rest`, guard, pin) | Supported |
 
 Everything listed as supported is exercised by the conformance suite. The
 table is kept in sync with the implementation rather than the ambition.
@@ -80,19 +83,16 @@ The current subset is intentionally conservative:
 - The `it` implicit block parameter is rejected; numbered parameters (`_1`)
   are supported. mruby 4.0's own compiler lowers `it` to a method call that is
   undefined at runtime, so accepting it would not make the program work.
-- Pattern matching supports value, variable, capture, array, hash (including
-  `**rest`), guard, and pinned patterns. Alternation patterns, find patterns,
-  and array rest patterns (`[a, *b]`) are rejected.
 - `alias` is limited to method names; global-variable aliases are rejected.
-- `begin ... end while` / `begin ... end until` loops are rejected.
-- `case/in` without a subject expression is rejected.
-- Hash splats are rejected inside a positional hash argument to a method
-  (`foo("k" => 1, **h)`).
+  mruby 4.0's own parser rejects global-variable aliases as well.
+- `case/in` without a subject expression is rejected. mruby 4.0's parser does
+  not accept it either.
 - Dynamic constant names (`A.const_set(name, x)`) are rejected; constant paths
   must be literal when they are assignment targets.
+- `&nil` in a formal parameter list (`def f(&nil)`) is a mruby-specific
+  extension that go-ruby-prism does not parse.
 - Regular expression literals compile, but executing them requires an mruby
-  build with the `mruby-regexp` mrbgem. Matching operators (`=~`) are not
-  lowered yet.
+  build with the `mruby-regexp` mrbgem.
 - Big integer literals compile, but running them requires an mruby build with
   the `mruby-bigint` mrbgem.
 
@@ -107,27 +107,31 @@ column. They are never silently ignored.
 Current explicit rejections include:
 
 - the `it` implicit block parameter
-- alternation, find, and array-rest patterns
+- dynamic constant-path operator assignment (`expr::CONST += 1`)
 - `BEGIN` / `END` blocks
 - `eval`, `load`, and `require` (host responsibilities)
 - encoding and magic comments
 - fibers, threads, refinements, and `TracePoint`
+- the mruby-specific `&nil` formal parameter, which Prism cannot parse
 
 ## Runtime parity
 
 `cmd/runtimecompat` runs mruby's own test files through both compilers. The
-2026-11-19 snapshot covers 160 runnable files:
+primary measurement uses the **mruby 4.0.0 tag**. The 2026-11-19 snapshot
+covers 106 runnable files:
 
 | Result | Count |
 | --- | --- |
-| Identical stdout/stderr/exit status | 155 |
-| Rejected by both compilers | 3 |
-| Different output | 2 |
+| Identical stdout/stderr/exit status | 105 |
+| `go-mrbc` cannot compile | 1 |
 
-Four of the 155 identical files time out at the same point under both
-compilers; the harness compares their partial output.
+The single compile failure is `test/t/syntax.rb`, which uses the
+mruby-specific `def f(&nil)` parameter form. go-ruby-prism does not parse it.
 
-The two differences are intentional:
+For reference, the same check against the local mruby development tree
+(`4.0.0-3011-gdbab56510`, 160 runnable files) reports 155 matches (including 4
+that time out at the same point), 3 files rejected by both compilers, and 2
+intentional differences:
 
 - **Integer arithmetic redefinition.** `go-mrbc` compiles operators as `SEND`,
   so a redefined `Integer#+` is observed. `mrbc --no-optimize` emits `OP_ADD`
@@ -178,12 +182,20 @@ the class list and testing it with `__case_eqq`.
 ### Pattern matching
 
 `case` / `in` supports value patterns (which use `===`), variable bindings,
-captures (`pattern => var`), array patterns, hash patterns, guards, and pinned
+captures (`pattern => var`), array patterns (including rest and posts),
+find patterns, alternation patterns, hash patterns, guards, and pinned
 variables or expressions. Array patterns call `deconstruct` and `size` and then
 index the result with `[]`; hash patterns call `deconstruct_keys` and use the
-same `__pat_values` / `__except` helpers as mruby's compiler. Regexp captures in
-patterns write the named local variables through `$~`. Unmatched patterns raise
-`NoMatchingPatternError` through `MATCHERR` when there is no `else` clause.
+same `__pat_values` / `__except` helpers as mruby's compiler. Find patterns
+search for the required subsequence and bind the left and right splats.
+Regexp captures in patterns write the named local variables through `$~`.
+Unmatched patterns raise `NoMatchingPatternError` through `MATCHERR` when there
+is no `else` clause.
+
+The rightward form (`value => pattern`) returns the value and raises on a
+mismatch. The predicate form (`value in pattern`) returns a boolean and is
+compiled as an extension; mruby 4.0's parser rejects that form, so it is not
+part of the reference-compatible subset.
 
 ### Regular expressions
 

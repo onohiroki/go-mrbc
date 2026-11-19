@@ -81,6 +81,15 @@ report. The wrapper supplies `t_print` and appends a deterministic summary
 line, so the test files can run under a plain `mruby` binary instead of
 `mrbtest`.
 
+For the primary 4.0.0 measurement, point both harnesses at a 4.0.0 worktree:
+
+```sh
+git -C mruby worktree add /tmp/mruby-4.0.0 4.0.0
+go run ./cmd/compat /tmp/mruby-4.0.0/test /tmp/mruby-4.0.0/mrbgems
+go run ./cmd/runtimecompat -assert /tmp/mruby-4.0.0/test/assert.rb \
+  /tmp/mruby-4.0.0/test/t /tmp/mruby-4.0.0/mrbgems
+```
+
 ## Running
 
 ```sh

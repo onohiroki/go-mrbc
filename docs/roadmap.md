@@ -24,7 +24,7 @@ English summary.
 - [x] `raise`, `begin` / `rescue` / `ensure`, `retry`, `redo`
 - [x] `alias` / `undef`
 - [x] Debug information (`-g`, LVAR/DBG)
-- [x] Pattern matching (value, variable, capture, array, hash, guard, pin)
+- [x] Pattern matching (value, variable, capture, array, rest, find, alternation, hash, guard, pin)
 - [x] Operator assignment on locals, globals, ivars, cvars, attributes, index
 - [x] Safe navigation, beginless/endless ranges, array/hash splats
 - [x] Interpolated symbols and xstrings, backreferences, `defined?`
@@ -33,8 +33,8 @@ English summary.
 - [x] Constant-path operator assignment (`A::X += 1`, `A::X ||= 1`)
 - [x] M5 compile-parity harness over mruby's test tree
 - [x] M6 runtime-parity harness over mruby's test tree
+- [x] M7 remaining pattern and control-flow syntax
 - [ ] Optimized opcodes
-- [ ] Alternation, find, and array-rest patterns
 
 ## M0 - Parser integration
 
@@ -135,6 +135,26 @@ The run also surfaced and fixed several compiler defects:
 - `break`/`next` inside a loop in a block target the loop, not the block;
 - constant `||=`/`&&=` treats an undefined constant as false;
 - constant-path operator assignment is supported for literal paths.
+
+See [compatibility-report.md](compatibility-report.md) for the full snapshot.
+
+## M7 - Remaining language syntax
+
+- Alternation, find, and array-rest patterns.
+- `begin ... end while` / `until` (do-while semantics).
+- `when *values` in `case`.
+- Keyword arguments to `yield`.
+- Packed argument arrays for calls with more than 14 positional arguments.
+- Rightward pattern matching (`value => pattern`) and the `in` predicate form.
+- Parsing and compiling regexp and interpolated-string patterns.
+
+Status: implemented. Against the mruby 4.0.0 tag, 152 of 153 files compile (the
+remaining file uses the mruby-specific `&nil` formal parameter, which Prism
+cannot parse), and 105 of 106 runnable files behave identically.
+
+A for-loop scope bug surfaced by the development tree was also fixed: a block
+nested in a `for` body can now capture both its own parameters and the for
+body's locals.
 
 See [compatibility-report.md](compatibility-report.md) for the full snapshot.
 

@@ -274,7 +274,11 @@ func dumpExpr(w io.Writer, expr Expr, depth int) error {
 			return dumpExpr(w, e.Else, depth+2)
 		}
 	case *WhileExpr:
-		fmt.Fprintf(w, "%swhile\n", prefix)
+		kind := "while"
+		if e.DoWhile {
+			kind = "do-while"
+		}
+		fmt.Fprintf(w, "%s%s\n", prefix, kind)
 		fmt.Fprintf(w, "%s  cond\n", prefix)
 		if err := dumpExpr(w, e.Cond, depth+2); err != nil {
 			return err
@@ -327,6 +331,12 @@ func dumpExpr(w io.Writer, expr Expr, depth int) error {
 			fmt.Fprintf(w, "%s  else\n", prefix)
 			return dumpBody(w, e.Else, depth+2)
 		}
+	case *MatchRequiredExpr:
+		fmt.Fprintf(w, "%smatch-required %s\n", prefix, patternDescription(e.Pattern))
+		return dumpExpr(w, e.Value, depth+1)
+	case *MatchPredicateExpr:
+		fmt.Fprintf(w, "%smatch-predicate %s\n", prefix, patternDescription(e.Pattern))
+		return dumpExpr(w, e.Value, depth+1)
 	case *DefExpr:
 		fmt.Fprintf(w, "%sdef %s params=%v locals=%v\n", prefix, e.Name, paramNames(e.Params), e.Locals)
 		return dumpBody(w, e.Body, depth+1)
@@ -399,7 +409,15 @@ func patternDescription(pattern Pattern) string {
 	case *CapturePattern:
 		return "capture " + p.Target.Name + " (" + patternDescription(p.Value) + ")"
 	case *ArrayPattern:
-		return fmt.Sprintf("array[%d]", len(p.Elements))
+		rest := ""
+		if p.HasRest {
+			rest = ", rest"
+		}
+		return fmt.Sprintf("array[%d%s]", len(p.Requireds)+len(p.Posts), rest)
+	case *FindPattern:
+		return fmt.Sprintf("find[%d]", len(p.Requireds))
+	case *AlternationPattern:
+		return "(" + patternDescription(p.Left) + " | " + patternDescription(p.Right) + ")"
 	default:
 		return fmt.Sprintf("%T", pattern)
 	}

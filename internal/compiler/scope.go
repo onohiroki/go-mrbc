@@ -66,6 +66,7 @@ type scope struct {
 	keywordSlot int
 	restSlot    int
 	forDepth    int
+	forScope    bool
 
 	rescue     *rescueContext
 	redoTarget label
@@ -372,6 +373,9 @@ func (s *scope) resolveUpvar(name string, depth int) (slot int, level int, ok bo
 }
 
 func (s *scope) effectiveDepth(depth int) int {
+	if !s.forScope && depth == 0 {
+		return 0
+	}
 	return depth + s.forDepth
 }
 

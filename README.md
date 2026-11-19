@@ -19,12 +19,13 @@ inheritance, `super`, instance/class variables, constants, keyword arguments,
 splats, lambdas, multiple assignment, exceptions, pattern matching, debug
 information, and `raise`.
 
-In addition, a compile-parity check over mruby's own test tree reports **zero
-files that `mrbc` accepts and `go-mrbc` rejects** (237 files, 2026-11-19), and a
-runtime-parity check executes mruby's test files through both compilers:
-**155 of 160 runnable files agree** (including 4 that time out at the same
-point), with the remaining two differences being cases where `go-mrbc` follows
-Ruby semantics more closely than `mrbc --no-optimize`. See
+Against the **mruby 4.0.0 tag**, 152 of 153 files compile (the remaining file
+uses the mruby-specific `&nil` formal parameter, which Prism cannot parse), and
+105 of 106 runnable files behave identically. Against the local development
+tree (3,011 commits after 4.0.0), 234 of 237 files compile and 155 of 160
+runnable files agree (including 4 that time out at the same point); the two
+remaining runtime differences are cases where `go-mrbc` follows Ruby semantics
+more closely than `mrbc --no-optimize`. See
 [Compatibility report](docs/compatibility-report.md).
 
 | Component | Status |
@@ -40,7 +41,7 @@ Ruby semantics more closely than `mrbc --no-optimize`. See
 | Multiple assignment | Implemented |
 | `begin` / `rescue` / `ensure` / `retry` | Implemented |
 | `alias` / `undef` | Implemented |
-| Pattern matching (including hash patterns) | Implemented |
+| Pattern matching (array rest, find, alternation, hash) | Implemented |
 | Debug information (`-g`, LVAR/DBG) | Implemented |
 | Regex literals (runtime gem required) | Compiled |
 | Peephole optimizer | Not planned initially |

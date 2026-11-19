@@ -562,9 +562,6 @@ func (l *lowerer) lowerExpr(node parser.Node) (Expr, error) {
 		}, nil
 
 	case *parser.WhileNode:
-		if n.IsBEGIN_MODIFIER() {
-			return nil, l.errorf(n, "begin/end while is not supported yet")
-		}
 		cond, err := l.lowerExpr(n.Predicate)
 		if err != nil {
 			return nil, err
@@ -573,12 +570,14 @@ func (l *lowerer) lowerExpr(node parser.Node) (Expr, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &WhileExpr{exprBase: base(pos), Cond: cond, Body: statementsExpr(body, pos)}, nil
+		return &WhileExpr{
+			exprBase: base(pos),
+			Cond:     cond,
+			Body:     statementsExpr(body, pos),
+			DoWhile:  n.IsBEGIN_MODIFIER(),
+		}, nil
 
 	case *parser.UntilNode:
-		if n.IsBEGIN_MODIFIER() {
-			return nil, l.errorf(n, "begin/end until is not supported yet")
-		}
 		cond, err := l.lowerExpr(n.Predicate)
 		if err != nil {
 			return nil, err
@@ -591,6 +590,7 @@ func (l *lowerer) lowerExpr(node parser.Node) (Expr, error) {
 			exprBase: base(pos),
 			Cond:     &NotExpr{exprBase: base(pos), Value: cond},
 			Body:     statementsExpr(body, pos),
+			DoWhile:  n.IsBEGIN_MODIFIER(),
 		}, nil
 
 	case *parser.CaseNode:
@@ -626,10 +626,10 @@ func (l *lowerer) lowerExpr(node parser.Node) (Expr, error) {
 		if err != nil {
 			return nil, err
 		}
-		if len(keywords) > 0 || blockArg != nil || forwardAll {
-			return nil, l.errorf(n, "keyword or block arguments to yield are not supported")
+		if blockArg != nil || forwardAll {
+			return nil, l.errorf(n, "block arguments to yield are not supported")
 		}
-		return &YieldExpr{exprBase: base(pos), Args: args}, nil
+		return &YieldExpr{exprBase: base(pos), Args: args, Keywords: keywords}, nil
 
 	case *parser.AndNode:
 		left, err := l.lowerExpr(n.Left)
@@ -758,6 +758,8 @@ func (l *lowerer) lowerExpr(node parser.Node) (Expr, error) {
 		return &RetryExpr{exprBase: base(pos)}, nil
 	case *parser.RedoNode:
 		return &RedoExpr{exprBase: base(pos)}, nil
+	case *parser.AliasGlobalVariableNode:
+		return nil, l.errorf(n, "global variable aliases are not supported")
 	case *parser.AliasMethodNode:
 		newName, err := l.aliasName(n.NewName)
 		if err != nil {
@@ -845,8 +847,26 @@ func (l *lowerer) lowerExpr(node parser.Node) (Expr, error) {
 			return nil, err
 		}
 		return &Call{exprBase: base(pos), Name: "defined?", Args: []Expr{value}}, nil
-	case *parser.MatchPredicateNode, *parser.MatchRequiredNode:
-		return nil, l.errorf(n, "regular expression matching is not supported yet")
+	case *parser.MatchPredicateNode:
+		value, err := l.lowerExpr(n.Value)
+		if err != nil {
+			return nil, err
+		}
+		pat, err := l.lowerPattern(n.Pattern)
+		if err != nil {
+			return nil, err
+		}
+		return &MatchPredicateExpr{exprBase: base(pos), Value: value, Pattern: pat}, nil
+	case *parser.MatchRequiredNode:
+		value, err := l.lowerExpr(n.Value)
+		if err != nil {
+			return nil, err
+		}
+		pat, err := l.lowerPattern(n.Pattern)
+		if err != nil {
+			return nil, err
+		}
+		return &MatchRequiredExpr{exprBase: base(pos), Value: value, Pattern: pat}, nil
 	case *parser.NumberedReferenceReadNode:
 		return &GlobalRead{exprBase: base(pos), Name: fmt.Sprintf("$%d", n.Number)}, nil
 	case *parser.BackReferenceReadNode:
@@ -1033,6 +1053,14 @@ func (l *lowerer) lowerCase(n *parser.CaseNode) (Expr, error) {
 		}
 		conds := make([]Expr, 0, len(whenNode.Conditions))
 		for _, condNode := range whenNode.Conditions {
+			if splat, ok := condNode.(*parser.SplatNode); ok {
+				value, err := l.lowerExpr(splat.Expression)
+				if err != nil {
+					return nil, err
+				}
+				conds = append(conds, &SplatArg{exprBase: base(l.pos(splat)), Value: value})
+				continue
+			}
 			cond, err := l.lowerExpr(condNode)
 			if err != nil {
 				return nil, err
@@ -1124,7 +1152,9 @@ func (l *lowerer) lowerPattern(node parser.Node) (Pattern, error) {
 	pos := l.pos(node)
 	switch n := node.(type) {
 	case *parser.IntegerNode, *parser.FloatNode, *parser.StringNode,
-		*parser.SymbolNode, *parser.NilNode, *parser.TrueNode,
+		*parser.InterpolatedStringNode, *parser.SymbolNode,
+		*parser.RegularExpressionNode, *parser.InterpolatedRegularExpressionNode,
+		*parser.NilNode, *parser.TrueNode,
 		*parser.FalseNode, *parser.SelfNode, *parser.ConstantReadNode,
 		*parser.ConstantPathNode, *parser.RangeNode:
 		value, err := l.lowerExpr(node)
@@ -1156,9 +1186,6 @@ func (l *lowerer) lowerPattern(node parser.Node) (Pattern, error) {
 		return &CapturePattern{patternBase: pattern(pos), Value: value, Target: target}, nil
 
 	case *parser.ArrayPatternNode:
-		if n.Rest != nil {
-			return nil, l.errorf(n.Rest, "array pattern rest is not supported yet")
-		}
 		var constant Expr
 		if n.Constant != nil {
 			var err error
@@ -1167,22 +1194,89 @@ func (l *lowerer) lowerPattern(node parser.Node) (Pattern, error) {
 				return nil, err
 			}
 		}
-		elements := make([]Pattern, 0, len(n.Requireds)+len(n.Posts))
+		requireds := make([]Pattern, 0, len(n.Requireds))
 		for _, element := range n.Requireds {
 			pattern, err := l.lowerPattern(element)
 			if err != nil {
 				return nil, err
 			}
-			elements = append(elements, pattern)
+			requireds = append(requireds, pattern)
 		}
+		var rest *Pattern
+		hasRest := n.Rest != nil
+		if hasRest {
+			splat, ok := n.Rest.(*parser.SplatNode)
+			if !ok {
+				return nil, l.unsupported(n.Rest)
+			}
+			if splat.Expression != nil {
+				pattern, err := l.lowerPattern(splat.Expression)
+				if err != nil {
+					return nil, err
+				}
+				rest = &pattern
+			}
+		}
+		posts := make([]Pattern, 0, len(n.Posts))
 		for _, element := range n.Posts {
 			pattern, err := l.lowerPattern(element)
 			if err != nil {
 				return nil, err
 			}
-			elements = append(elements, pattern)
+			posts = append(posts, pattern)
 		}
-		return &ArrayPattern{patternBase: pattern(pos), Constant: constant, Elements: elements}, nil
+		return &ArrayPattern{
+			patternBase: pattern(pos),
+			Constant:    constant,
+			Requireds:   requireds,
+			Rest:        rest,
+			HasRest:     hasRest,
+			Posts:       posts,
+		}, nil
+
+	case *parser.FindPatternNode:
+		var constant Expr
+		if n.Constant != nil {
+			var err error
+			constant, err = l.lowerExpr(n.Constant)
+			if err != nil {
+				return nil, err
+			}
+		}
+		left, err := l.lowerSplatPattern(n.Left)
+		if err != nil {
+			return nil, err
+		}
+		requireds := make([]Pattern, 0, len(n.Requireds))
+		for _, element := range n.Requireds {
+			pattern, err := l.lowerPattern(element)
+			if err != nil {
+				return nil, err
+			}
+			requireds = append(requireds, pattern)
+		}
+		right, err := l.lowerSplatPattern(n.Right)
+		if err != nil {
+			return nil, err
+		}
+		return &FindPattern{
+			patternBase: pattern(pos),
+			Constant:    constant,
+			Left:        left,
+			Requireds:   requireds,
+			Right:       right,
+		}, nil
+
+	case *parser.AlternationPatternNode:
+		left, err := l.lowerPattern(n.Left)
+		if err != nil {
+			return nil, err
+		}
+		right, err := l.lowerPattern(n.Right)
+		if err != nil {
+			return nil, err
+		}
+		return &AlternationPattern{patternBase: pattern(pos), Left: left, Right: right}, nil
 
 	case *parser.PinnedVariableNode:
 		value, err := l.lowerExpr(n.Variable)
@@ -1242,10 +1336,6 @@ func (l *lowerer) lowerPattern(node parser.Node) (Pattern, error) {
 			Entries:     entries,
 			Rest:        rest,
 		}, nil
-	case *parser.FindPatternNode:
-		return nil, l.errorf(n, "find patterns are not supported yet")
-	case *parser.AlternationPatternNode:
-		return nil, l.errorf(n, "alternation patterns are not supported yet")
 	}
 	return nil, l.errorf(node, "unsupported pattern: %s", nodeName(node))
 }
@@ -1385,15 +1475,18 @@ func (l *lowerer) lowerParameters(params *parser.ParametersNode) ([]Param, error
 
 func (l *lowerer) keywordHashPositional(node *parser.KeywordHashNode) bool {
 	for _, element := range node.Elements {
-		assoc, ok := element.(*parser.AssocNode)
-		if !ok {
+		switch assoc := element.(type) {
+		case *parser.AssocSplatNode:
+			continue
+		case *parser.AssocNode:
+			if assoc.OperatorLoc != nil {
+				return true
+			}
+			if _, ok := assoc.Key.(*parser.SymbolNode); !ok {
+				return true
+			}
+		default:
 			return false
-		}
-		if assoc.OperatorLoc != nil {
-			return true
-		}
-		if _, ok := assoc.Key.(*parser.SymbolNode); !ok {
-			return true
 		}
 	}
 	return false
@@ -1515,19 +1608,26 @@ func (l *lowerer) lowerCallParts(args *parser.ArgumentsNode) ([]Expr, []KeywordA
 			if l.keywordHashPositional(arg) {
 				var pairs []HashPair
 				for _, element := range arg.Elements {
-					assoc, ok := element.(*parser.AssocNode)
-					if !ok {
-						return nil, nil, nil, false, l.errorf(element, "hash splats in positional hash arguments are not supported")
+					switch assoc := element.(type) {
+					case *parser.AssocSplatNode:
+						value, err := l.lowerExpr(assoc.Value)
+						if err != nil {
+							return nil, nil, nil, false, err
+						}
+						pairs = append(pairs, HashPair{Value: value})
+					case *parser.AssocNode:
+						key, err := l.lowerExpr(assoc.Key)
+						if err != nil {
+							return nil, nil, nil, false, err
+						}
+						value, err := l.lowerExpr(assoc.Value)
+						if err != nil {
+							return nil, nil, nil, false, err
+						}
+						pairs = append(pairs, HashPair{Key: key, Value: value})
+					default:
+						return nil, nil, nil, false, l.unsupported(element)
 					}
-					key, err := l.lowerExpr(assoc.Key)
-					if err != nil {
-						return nil, nil, nil, false, err
-					}
-					value, err := l.lowerExpr(assoc.Value)
-					if err != nil {
-						return nil, nil, nil, false, err
-					}
-					pairs = append(pairs, HashPair{Key: key, Value: value})
 				}
 				positional = append(positional, &HashLiteral{exprBase: base(l.pos(arg)), Pairs: pairs})
 				continue
@@ -2004,15 +2104,47 @@ func (l *lowerer) lowerArguments(args *parser.ArgumentsNode) ([]Expr, error) {
 	}
 	out := make([]Expr, 0, len(args.Arguments))
 	for _, node := range args.Arguments {
-		switch node.(type) {
+		switch n := node.(type) {
 		case *parser.SplatNode:
-			return nil, l.errorf(node, "splat arguments are not supported yet")
+			value, err := l.lowerExpr(n.Expression)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, &SplatArg{exprBase: base(l.pos(n)), Value: value})
+			continue
 		case *parser.KeywordHashNode:
-			return nil, l.errorf(node, "keyword arguments are not supported yet")
+			if !l.keywordHashPositional(n) {
+				return nil, l.errorf(node, "keyword arguments are not supported here")
+			}
+			var pairs []HashPair
+			for _, element := range n.Elements {
+				switch assoc := element.(type) {
+				case *parser.AssocSplatNode:
+					value, err := l.lowerExpr(assoc.Value)
+					if err != nil {
+						return nil, err
+					}
+					pairs = append(pairs, HashPair{Value: value})
+				case *parser.AssocNode:
+					key, err := l.lowerExpr(assoc.Key)
+					if err != nil {
+						return nil, err
+					}
+					value, err := l.lowerExpr(assoc.Value)
+					if err != nil {
+						return nil, err
+					}
+					pairs = append(pairs, HashPair{Key: key, Value: value})
+				default:
+					return nil, l.unsupported(element)
+				}
+			}
+			out = append(out, &HashLiteral{exprBase: base(l.pos(n)), Pairs: pairs})
+			continue
 		case *parser.BlockArgumentNode:
-			return nil, l.errorf(node, "block argument forwarding is not supported yet")
+			return nil, l.errorf(node, "block argument forwarding is not supported here")
 		case *parser.ForwardingArgumentsNode:
-			return nil, l.errorf(node, "argument forwarding is not supported yet")
+			return nil, l.errorf(node, "argument forwarding is not supported here")
 		}
 		expr, err := l.lowerExpr(node)
 		if err != nil {
@@ -2097,6 +2229,24 @@ func (l *lowerer) lowerInterpolatedString(n *parser.InterpolatedStringNode) (Exp
 		return nil, err
 	}
 	return &InterpolatedString{exprBase: base(l.pos(n)), Parts: parts}, nil
+}
+
+func (l *lowerer) lowerSplatPattern(node parser.Node) (*Pattern, error) {
+	splat, ok := node.(*parser.SplatNode)
+	if !ok {
+		if node == nil {
+			return nil, nil
+		}
+		return nil, l.unsupported(node)
+	}
+	if splat == nil || splat.Expression == nil {
+		return nil, nil
+	}
+	pattern, err := l.lowerPattern(splat.Expression)
+	if err != nil {
+		return nil, err
+	}
+	return &pattern, nil
 }
 
 func (l *lowerer) lowerStringParts(parts []parser.Node) ([]Expr, error) {
