@@ -246,13 +246,13 @@ noblock:1 req:5 opt:5 rest:1 post:5 key:5 kdict:1 block:1
 
 ### Tier 2: M3 以降
 
-- `begin/rescue/ensure`
-- `retry` / `redo`
-- パターンマッチング `case/in`
-- `alias` / `undef`
-- `defined?`、safe navigation `&.`
-- `__FILE__` / `__LINE__`、特殊変数
-- `-g`（DBG）、LVAR
+- `begin/rescue/ensure`（実装済み）
+- `retry` / `redo`（実装済み）
+- パターンマッチング `case/in`（値・変数・配列・hash まで実装済み）
+- `alias` / `undef`（実装済み）
+- `defined?`、safe navigation `&.`（実装済み）
+- `__FILE__` / `__LINE__` / `__ENCODING__`、特殊変数（実装済み）
+- `-g`（DBG）、LVAR（実装済み）
 
 ### 対象外
 
@@ -318,6 +318,7 @@ RBENV_VERSION=mruby-4.0.0 mruby /tmp/basic.mrb
 | M2 | クラス/モジュール、ivars、キーワード引数、lambda、多重代入、super | 5–8 日 |
 | M3 | 例外/ensure、catch table、非局所制御、デバッグ情報 | 3–5 日 |
 | M4 | 最適化、パターンマッチ、メタプログラミング系の整備、性能 | 継続 |
+| M5 | mruby 付属テストによるコンパイル一致ハーネスと構文ギャップの解消 | 継続 |
 
 M1 完了時点で「手続き型＋ブロック＋配列/ハッシュ」のマクロ言語として
 実用になる。M2 でクラスベースの DSL も書けるようになる。
@@ -357,44 +358,60 @@ M1 完了時点で「手続き型＋ブロック＋配列/ハッシュ」のマ�
 - `internal/compiler`:
   - ローカル変数・upvar（`GETUPVAR`/`SETUPVAR`）
   - ローカル/グローバル/ivars/クラス変数/属性/index の複合代入（`+=`, `||=`, `&&=`）
-  - リテラル、配列、ハッシュ、範囲、文字列補間
+  - リテラル、配列、ハッシュ、範囲（beginless/endless を含む）、文字列補間
+  - 配列・ハッシュの splat、補間シンボル、xstring、`Rational`/`Imaginary`
   - `if/unless/elsif`、`while/until`、`case/when`、`&&/||/!`
-  - `def`（必須・オプショナル・post・rest・キーワード引数）、`return`
-  - ブロック、`yield`、ブロック引数 `&b`、無名ブロック転送、splat 呼び出し
+  - safe navigation `&.`
+  - `def`（必須・オプショナル・post・rest・キーワード引数・分割代入パラメータ）、`return`
+  - ブロック、`yield`（splat 引数を含む）、ブロック引数 `&b`、無名ブロック転送、splat 呼び出し
   - 引数転送 `...`、番号付きブロック引数 `_1`
   - `break`/`next`（while/until、ブロック、lambda）
   - `begin/rescue/ensure/else`、catch handler、`retry`、`redo`
+  - `rescue *ERRORS`（splat rescue class）
   - `alias` / `undef`
   - DBG / LVAR（`-g` で行番号、デフォルトでローカル変数名）
-  - パターンマッチ（値・変数・キャプチャ・配列・ガード・pin）
+  - パターンマッチ（値・変数・キャプチャ・配列・hash・ガード・pin）
+  - match-write（`/(?<name>...)/ =~ str` によるローカル変数への捕捉）
   - `raise`（例外の送出と捕捉）
+  - `__FILE__` / `__LINE__` / `__ENCODING__`、`$1` などの番号付き参照、
+    `$&` などの後方参照、`defined?`
   - クラス/モジュール、継承、`super`（通常・zsuper・ブロック内）、
     クラスメソッド、特異メソッド、`class << self`、ネストしたクラス、
     `A::B` 形式のクラス定義
-  - インスタンス変数、クラス変数、定数の読み書き、`A::B` 定数参照
+  - インスタンス変数、クラス変数、定数の読み書き、`A::B` 定数参照・代入
   - キーワード引数（必須・オプショナル・`**rest`）、キーワード hash、
-    splat との併用、`super` へのキーワード引数
+    splat との併用、`super` へのキーワード引数、implicit hash shorthand
   - `lambda` / `proc`、ラムダ内の `return` / `next`
-  - 多重代入（ローカル・グローバル・ivars・定数・index・属性・splat）
+  - 多重代入（ローカル・グローバル・ivars・定数・index・属性・splat・ネスト）
   - `for` ループ（分割代入ターゲットを含む）
+  - 正規表現リテラル（`Regexp.compile` 呼び出しに変換。実行には
+    ターゲット VM の `mruby-regexp` が必要）
 - `mrbc` パッケージと `gomrbc` CLI
 - 差分実行テスト（`mrbc --no-optimize` と mruby 4.0.0 をオラクルに使用）
 - 適合コーパス `testdata/conformance/`
+- コンパイル一致ハーネス `cmd/compat`（mruby の `test/` と `mrbgems/` を走査）
+  - 2026-11-19 時点: 237 ファイル中、両方成功 234、`mrbc` のみ成功 0、
+    両方失敗 3（mruby のパーサが拒否するファイル）
 
 ### 現時点の制限
 
 - `yield` はメソッド本体と、そのメソッド内のブロックから利用可能。
   クラス本体や lambda 内からの `yield` はエラー
 - `it` 暗黙ブロック引数は未対応（`_1` は対応）
-- ネストした多重代入ターゲット（`(a, b), c = ...`）は未対応
-- 定数パスへの代入・複合代入（`A::X = 1`, `A::X += 1`）は未対応
-- `defined?` は未対応
-- パターンマッチの hash / alternation / find / 配列 rest は未対応
-- `rescue *ERRORS` とグローバル変数の `alias` は未対応
+- 定数パスへの複合代入（`A::X += 1`）は未対応（`A::X = 1` は対応）
+- パターンマッチの alternation / find / 配列 rest は未対応
+  （hash パターンと `**rest` は対応）
+- グローバル変数の `alias` は未対応
+- `begin ... end while` / `begin ... end until` は未対応
+- 述語なしの `case/in`（`case; in ...`）は未対応
+- 位置引数としての hash 内 splat（`foo("k" => 1, **h)`）は未対応
+- 動的な定数名は未対応（定数パスはリテラルのみ）
+- 正規表現リテラルはコンパイルできるが、`=~` によるマッチ式の lowering は未対応
 
 ### 次の作業
 
-1. 適合コーパスの拡充（パターンマッチ・デバッグ情報の境界ケース）
-2. M4: 最適化 opcode、パターンマッチ拡張（hash/alternation/find/rest）、性能
+1. 適合コーパスの拡充（safe navigation、splat、分割代入、hash パターンの境界ケース）
+2. M4: 最適化 opcode、パターンマッチ拡張（alternation/find/rest）、性能
+3. 必要に応じて `cmd/compat` を CI に組み込み、構文ギャップの回帰を検出する
 
 M0.5 は M0 と独立しているため、並行して進めてもよい。

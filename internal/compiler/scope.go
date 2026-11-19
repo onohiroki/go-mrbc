@@ -168,6 +168,14 @@ func (s *scope) initLocals(locals []string) error {
 				return err
 			}
 			positional++
+		case frontend.ParamDestructure:
+			name := fmt.Sprintf("__arg_destructure_%d", i)
+			param.Name = name
+			if err := bind(name, next); err != nil {
+				return err
+			}
+			next++
+			positional++
 		case frontend.ParamRest:
 			slot := next
 			if param.Name != "" {
@@ -330,7 +338,9 @@ func (s *scope) finish() error {
 	s.irep.Lines = s.lines
 	names := make([]string, s.nlocals)
 	for name, slot := range s.locals {
-		if slot > 0 && slot < len(names) && !strings.HasPrefix(name, "__gomrbc_for_") {
+		if slot > 0 && slot < len(names) &&
+			!strings.HasPrefix(name, "__gomrbc_for_") &&
+			!strings.HasPrefix(name, "__arg_destructure_") {
 			names[slot] = name
 		}
 	}
@@ -362,6 +372,8 @@ func (s *scope) enterAspec() (uint32, int) {
 	for _, param := range s.params {
 		switch param.Kind {
 		case frontend.ParamRequired:
+			req++
+		case frontend.ParamDestructure:
 			req++
 		case frontend.ParamOptional:
 			opt++

@@ -91,6 +91,27 @@ func (c *Compiler) compileExpr(s *scope, expr frontend.Expr, dst int) {
 
 	case *frontend.InterpolatedString:
 		c.compileInterpolatedString(s, e, dst)
+	case *frontend.SymbolInterpolation:
+		base := s.alloc(1)
+		c.compileStringParts(s, e.Parts, base)
+		s.emit(bytecode.OpINTERN, uint32(base))
+		s.emitMove(dst, base)
+	case *frontend.RegexLiteral:
+		base := s.alloc(3)
+		s.emit(bytecode.OpOCLASS, uint32(base))
+		s.emit(bytecode.OpGETMCNST, uint32(base), s.sym("Regexp"))
+		s.emit(bytecode.OpSTRING, uint32(base+1), uint32(s.irep.PoolIndex(bytecode.StringEntry(e.Source))))
+		s.emit(bytecode.OpSTRING, uint32(base+2), uint32(s.irep.PoolIndex(bytecode.StringEntry(e.Flags))))
+		s.emit(bytecode.OpSEND, uint32(base), s.sym("compile"), 2)
+		s.emitMove(dst, base)
+	case *frontend.RegexInterpolation:
+		base := s.alloc(3)
+		s.emit(bytecode.OpOCLASS, uint32(base))
+		s.emit(bytecode.OpGETMCNST, uint32(base), s.sym("Regexp"))
+		c.compileStringParts(s, e.Parts, base+1)
+		s.emit(bytecode.OpSTRING, uint32(base+2), uint32(s.irep.PoolIndex(bytecode.StringEntry(e.Flags))))
+		s.emit(bytecode.OpSEND, uint32(base), s.sym("compile"), 2)
+		s.emitMove(dst, base)
 	case *frontend.ArrayLiteral:
 		c.compileArray(s, e, dst)
 	case *frontend.HashLiteral:
@@ -140,6 +161,16 @@ func (c *Compiler) compileExpr(s *scope, expr frontend.Expr, dst int) {
 	case *frontend.ConstantPathRead:
 		c.compileExpr(s, e.Parent, dst)
 		s.emit(bytecode.OpGETMCNST, uint32(dst), s.sym(e.Name))
+	case *frontend.ConstantPathWrite:
+		base := s.alloc(2)
+		if e.Parent != nil {
+			c.compileExpr(s, e.Parent, base+1)
+		} else {
+			s.emit(bytecode.OpOCLASS, uint32(base+1))
+		}
+		c.compileExpr(s, e.Value, base)
+		s.emit(bytecode.OpSETMCNST, uint32(base), s.sym(e.Name))
+		s.emitMove(dst, base)
 
 	case *frontend.ClassDef:
 		c.compileClass(s, e, dst)
@@ -150,6 +181,8 @@ func (c *Compiler) compileExpr(s *scope, expr frontend.Expr, dst int) {
 
 	case *frontend.Call:
 		c.compileCall(s, e, dst)
+	case *frontend.MatchWriteExpr:
+		c.compileMatchWrite(s, e, dst)
 	case *frontend.SuperExpr:
 		c.compileSuper(s, e, dst)
 	case *frontend.LambdaExpr:
@@ -304,17 +337,33 @@ func (c *Compiler) compileInteger(s *scope, dst int, value int64) {
 
 func (c *Compiler) compileInterpolatedString(s *scope, e *frontend.InterpolatedString, dst int) {
 	base := s.alloc(1)
-	s.emit(bytecode.OpSTRING, uint32(base), uint32(s.irep.PoolIndex(bytecode.StringEntry(""))))
-	for _, part := range e.Parts {
-		value := s.alloc(1)
-		c.compileExpr(s, part, value)
-		s.emit(bytecode.OpSTRCAT, uint32(base))
-		s.sp = value
-	}
+	c.compileStringParts(s, e.Parts, base)
 	s.emitMove(dst, base)
 }
 
+func (c *Compiler) compileStringParts(s *scope, parts []frontend.Expr, base int) {
+	s.emit(bytecode.OpSTRING, uint32(base), uint32(s.irep.PoolIndex(bytecode.StringEntry(""))))
+	headerSP := s.sp
+	for _, part := range parts {
+		s.setSP(base + 2)
+		c.compileExpr(s, part, base+1)
+		s.emit(bytecode.OpSTRCAT, uint32(base))
+	}
+	s.sp = headerSP
+}
+
 func (c *Compiler) compileArray(s *scope, e *frontend.ArrayLiteral, dst int) {
+	hasSplat := false
+	for _, element := range e.Elements {
+		if _, ok := element.(*frontend.SplatArg); ok {
+			hasSplat = true
+			break
+		}
+	}
+	if hasSplat {
+		c.buildArgArray(s, e.Elements, dst)
+		return
+	}
 	if len(e.Elements) == 0 {
 		base := s.alloc(1)
 		s.emit(bytecode.OpARRAY, uint32(base), 0)
@@ -330,6 +379,33 @@ func (c *Compiler) compileArray(s *scope, e *frontend.ArrayLiteral, dst int) {
 }
 
 func (c *Compiler) compileHash(s *scope, e *frontend.HashLiteral, dst int) {
+	hasSplat := false
+	for _, pair := range e.Pairs {
+		if pair.Key == nil {
+			hasSplat = true
+			break
+		}
+	}
+	if hasSplat {
+		base := s.alloc(1)
+		s.emit(bytecode.OpHASH, uint32(base), 0)
+		headerSP := s.sp
+		for _, pair := range e.Pairs {
+			if pair.Key == nil {
+				s.setSP(base + 2)
+				c.compileExpr(s, pair.Value, base+1)
+				s.emit(bytecode.OpHASHCAT, uint32(base))
+				continue
+			}
+			s.setSP(base + 3)
+			c.compileExpr(s, pair.Key, base+1)
+			c.compileExpr(s, pair.Value, base+2)
+			s.emit(bytecode.OpHASHADD, uint32(base), 1)
+		}
+		s.sp = headerSP
+		s.emitMove(dst, base)
+		return
+	}
 	if len(e.Pairs) == 0 {
 		base := s.alloc(1)
 		s.emit(bytecode.OpHASH, uint32(base), 0)
@@ -520,10 +596,72 @@ func (c *Compiler) compilePattern(s *scope, pat frontend.Pattern, subject int, f
 		}
 		s.sp = base
 		return true
+	case *frontend.HashPattern:
+		return c.compileHashPattern(s, p, subject, fail)
 	default:
 		c.failExpr(nil, "compiler: unsupported pattern %T", pat)
 		return false
 	}
+}
+
+func (c *Compiler) compileHashPattern(s *scope, p *frontend.HashPattern, subject int, fail label) bool {
+	if p.Constant != nil {
+		check := &frontend.ValuePattern{Value: p.Constant}
+		if !c.compilePattern(s, check, subject, fail) {
+			return false
+		}
+	}
+	sp0 := s.sp
+	count := len(p.Entries)
+	keys := s.alloc(count)
+	if count == 0 {
+		keys = s.alloc(1)
+		s.emit(bytecode.OpARRAY, uint32(keys), 0)
+	} else {
+		for i, entry := range p.Entries {
+			s.emit(bytecode.OpLOADSYM, uint32(keys+i), s.sym(entry.Key))
+		}
+		s.emit(bytecode.OpARRAY, uint32(keys), uint32(count))
+	}
+
+	deconstructed := s.alloc(2)
+	s.emitMove(deconstructed, subject)
+	s.emitMove(deconstructed+1, keys)
+	s.emit(bytecode.OpSEND, uint32(deconstructed), s.sym("deconstruct_keys"), 1)
+
+	values := s.alloc(1)
+	s.emitMove(values, deconstructed)
+	s.setSP(values + 2)
+	s.emitMove(values+1, keys)
+	s.emit(bytecode.OpSEND, uint32(values), s.sym("__pat_values"), 1)
+	s.asm.jmpIf(bytecode.OpJMPNOT, values, fail)
+
+	elementBase := values + 1
+	for i, entry := range p.Entries {
+		s.setSP(elementBase)
+		value := s.alloc(1)
+		s.emitMove(value, values)
+		index := s.alloc(1)
+		c.compileInteger(s, index, int64(i))
+		s.emit(bytecode.OpSEND, uint32(value), s.sym("[]"), 1)
+		if !c.compilePattern(s, entry.Value, value, fail) {
+			return false
+		}
+	}
+
+	if p.Rest != nil {
+		s.setSP(elementBase)
+		rest := s.alloc(2)
+		s.emitMove(rest, deconstructed)
+		s.emitMove(rest+1, keys)
+		s.emit(bytecode.OpSEND, uint32(rest), s.sym("__except"), 1)
+		if !c.assignDirect(s, *p.Rest, rest) {
+			return false
+		}
+	}
+
+	s.sp = sp0
+	return true
 }
 
 func (c *Compiler) compileDef(s *scope, e *frontend.DefExpr, dst int) {
@@ -687,6 +825,12 @@ func (c *Compiler) assignIndexed(s *scope, target frontend.MultiTarget, value, i
 		ok := c.emitTargetAssign(s, target, temp)
 		s.sp = sp0
 		return ok
+	case frontend.TargetNested:
+		temp := s.alloc(1)
+		s.emit(bytecode.OpAREF, uint32(temp), uint32(value), uint32(index))
+		ok := c.assignNested(s, target, temp)
+		s.sp = sp0
+		return ok
 	default:
 		c.fail(target.Pos, "unsupported multiple assignment target")
 		return false
@@ -727,10 +871,24 @@ func (c *Compiler) assignDirect(s *scope, target frontend.MultiTarget, src int) 
 		ok := c.emitTargetAssign(s, target, src)
 		s.sp = sp0
 		return ok
+	case frontend.TargetNested:
+		sp0 := s.sp
+		ok := c.assignNested(s, target, src)
+		s.sp = sp0
+		return ok
 	default:
 		c.fail(target.Pos, "unsupported multiple assignment target")
 		return false
 	}
+}
+
+func (c *Compiler) assignNested(s *scope, target frontend.MultiTarget, src int) bool {
+	sp0 := s.sp
+	if !c.assignDestructure(s, target.Lefts, target.Rest, target.Posts, src, sp0) {
+		return false
+	}
+	s.sp = sp0
+	return true
 }
 
 func (c *Compiler) emitTargetAssign(s *scope, target frontend.MultiTarget, src int) bool {
@@ -912,12 +1070,29 @@ func (c *Compiler) compileRescueHandlers(s *scope, e *frontend.BeginExpr, dst in
 			s.asm.jmpIf(bytecode.OpJMPIF, classReg, bodyLabel)
 			s.asm.jmp(nextLabel)
 		} else {
+			hasSplat := false
 			for _, classExpr := range clause.Classes {
-				c.compileExpr(s, classExpr, classReg)
-				s.emit(bytecode.OpRESCUE, uint32(exc), uint32(classReg))
-				s.asm.jmpIf(bytecode.OpJMPIF, classReg, bodyLabel)
+				if _, ok := classExpr.(*frontend.SplatArg); ok {
+					hasSplat = true
+					break
+				}
 			}
-			s.asm.jmp(nextLabel)
+			if hasSplat {
+				pair := s.alloc(2)
+				c.buildArgArray(s, clause.Classes, pair)
+				s.setSP(pair + 2)
+				s.emitMove(pair+1, exc)
+				s.emit(bytecode.OpSEND, uint32(pair), s.sym("__case_eqq"), 1)
+				s.asm.jmpIf(bytecode.OpJMPIF, pair, bodyLabel)
+				s.asm.jmp(nextLabel)
+			} else {
+				for _, classExpr := range clause.Classes {
+					c.compileExpr(s, classExpr, classReg)
+					s.emit(bytecode.OpRESCUE, uint32(exc), uint32(classReg))
+					s.asm.jmpIf(bytecode.OpJMPIF, classReg, bodyLabel)
+				}
+				s.asm.jmp(nextLabel)
+			}
 		}
 
 		s.asm.bind(bodyLabel)
@@ -955,7 +1130,48 @@ func (c *Compiler) compileRedo(s *scope, e *frontend.RedoExpr) {
 	s.asm.jmpuw(s.redoTarget)
 }
 
+func (c *Compiler) compileMatchWrite(s *scope, e *frontend.MatchWriteExpr, dst int) {
+	sp0 := s.sp
+	result := s.alloc(1)
+	c.compileExpr(s, e.Call, result)
+	for _, target := range e.Targets {
+		if target.Kind != frontend.TargetLocal {
+			c.fail(target.Pos, "only local variables are supported as match-write targets")
+			return
+		}
+		base := s.alloc(2)
+		s.emit(bytecode.OpGETGV, uint32(base), s.sym("$~"))
+		s.emit(bytecode.OpLOADSYM, uint32(base+1), s.sym(target.Name))
+		s.emit(bytecode.OpSEND, uint32(base), s.sym("[]"), 1)
+		if !c.assignDirect(s, target, base) {
+			return
+		}
+		s.sp = sp0 + 1
+	}
+	s.emitMove(dst, result)
+	s.sp = sp0
+}
+
 func (c *Compiler) compileCall(s *scope, e *frontend.Call, dst int) {
+	if e.SafeNavigation && e.Receiver != nil {
+		receiver := s.alloc(1)
+		c.compileExpr(s, e.Receiver, receiver)
+		nilLabel := s.asm.newLabel()
+		endLabel := s.asm.newLabel()
+		s.asm.jmpIf(bytecode.OpJMPNIL, receiver, nilLabel)
+		clone := *e
+		clone.SafeNavigation = false
+		c.compileCallPrepared(s, &clone, dst, receiver)
+		s.asm.jmp(endLabel)
+		s.asm.bind(nilLabel)
+		s.emit(bytecode.OpLOADNIL, uint32(dst))
+		s.asm.bind(endLabel)
+		return
+	}
+	c.compileCallPrepared(s, e, dst, -1)
+}
+
+func (c *Compiler) compileCallPrepared(s *scope, e *frontend.Call, dst, preReceiver int) {
 	if e.Block != nil && e.BlockArg != nil {
 		c.failExpr(e, "both a block and a block argument are not allowed")
 		return
@@ -1015,7 +1231,11 @@ func (c *Compiler) compileCall(s *scope, e *frontend.Call, dst int) {
 
 	base := s.alloc(1 + positionalRegs + keywordRegs + blockRegs)
 	if !e.ImplicitSelf() {
-		c.compileExpr(s, e.Receiver, base)
+		if preReceiver >= 0 {
+			s.emitMove(base, preReceiver)
+		} else {
+			c.compileExpr(s, e.Receiver, base)
+		}
 	}
 	if hasPositionalSplat {
 		c.buildArgArray(s, e.Args, base+1)
@@ -1179,14 +1399,21 @@ func (c *Compiler) buildArgArray(s *scope, args []frontend.Expr, dst int) {
 }
 
 func (c *Compiler) compileSuper(s *scope, e *frontend.SuperExpr, dst int) {
-	if s.yieldLevel < 0 || s.method == nil || s.method.methodInfo == nil {
+	var info *methodInfo
+	if s.method != nil {
+		info = s.method.methodInfo
+	}
+	if info == nil && e.Forwarding {
 		c.failExpr(e, "super is not available here")
 		return
 	}
-	info := s.method.methodInfo
-	level := s.yieldLevel
+	if info != nil && s.yieldLevel < 0 {
+		c.failExpr(e, "super is not available here")
+		return
+	}
 
 	if e.Forwarding {
+		level := s.yieldLevel
 		if info.ainfo > 0 {
 			if info.ainfo&1 != 0 && len(info.keywordParams) > 0 && !info.hasKeywordRest {
 				c.rebuildKeywordHash(s, info)
@@ -1293,8 +1520,10 @@ func (c *Compiler) compileSuper(s *scope, e *frontend.SuperExpr, dst int) {
 		s.emit(bytecode.OpBLOCK, uint32(blockReg), uint32(index))
 	} else if e.BlockArg != nil {
 		c.compileExpr(s, e.BlockArg, blockReg)
-	} else {
+	} else if info != nil {
 		c.emitMethodSlot(s, blockReg, info.blockSlot)
+	} else {
+		s.emit(bytecode.OpLOADNIL, uint32(blockReg))
 	}
 	positionalInfo := uint32(n)
 	if hasPositionalSplat {
@@ -1310,16 +1539,30 @@ func (c *Compiler) compileYield(s *scope, e *frontend.YieldExpr, dst int) {
 		c.failExpr(e, "yield outside a method is not supported")
 		return
 	}
+	base := s.alloc(1 + len(e.Args))
 	if len(e.Args) > 14 {
 		c.failExpr(e, "too many yield arguments")
 		return
 	}
-	base := s.alloc(1 + len(e.Args))
-	for i, arg := range e.Args {
-		c.compileExpr(s, arg, base+1+i)
+	hasSplat := false
+	for _, arg := range e.Args {
+		if _, ok := arg.(*frontend.SplatArg); ok {
+			hasSplat = true
+			break
+		}
 	}
 	info := s.method.methodInfo
 	aspec := uint32(((info.ainfo << 4) | s.yieldLevel) & 0xffff)
+	if hasSplat {
+		c.buildArgArray(s, e.Args, base+1)
+		s.emit(bytecode.OpBLKPUSH, uint32(base), aspec)
+		s.emit(bytecode.OpSEND, uint32(base), s.sym("call"), 15)
+		s.emitMove(dst, base)
+		return
+	}
+	for i, arg := range e.Args {
+		c.compileExpr(s, arg, base+1+i)
+	}
 	s.emit(bytecode.OpBLKPUSH, uint32(base), aspec)
 	s.emit(bytecode.OpBLKCALL, uint32(base), uint32(len(e.Args)))
 	s.emitMove(dst, base)

@@ -48,6 +48,20 @@ files.
 The corpus is intentionally shared with the pure-Go VM project so that both
 implementations can be checked against the same behavior.
 
+## Compiling mruby's own test tree
+
+`cmd/compat` compares `go-mrbc` with `mrbc` on a directory of Ruby files. It
+reports files that `mrbc` accepts but `go-mrbc` rejects, grouped by reason.
+
+```sh
+export RBENV_VERSION=mruby-4.0.0
+go run ./cmd/compat mruby/test mruby/mrbgems
+```
+
+The current snapshot is recorded in
+[compatibility-report.md](compatibility-report.md). The check is compile-only;
+runtime behavior is covered by the conformance suite.
+
 ## Running
 
 ```sh

@@ -19,14 +19,13 @@ func TestUnsupportedSyntax(t *testing.T) {
 		src  string
 		want string
 	}{
-		{"defined", "defined?(x)\n", "defined?"},
-		{"hash pattern", "case { a: 1 }\nin { a: }\nend\n", "hash patterns"},
 		{"alternation pattern", "case 1\nin 1 | 2\n  puts 1\nend\n", "alternation patterns"},
+		{"find pattern", "case [1, 2]\nin [*, 1, *]\n  puts 1\nend\n", "find patterns"},
 		{"rest pattern", "case [1]\nin [a, *b]\n  puts a\nend\n", "array pattern rest"},
 		{"it parameter", "[1].map { it * 2 }\n", "the 'it' block parameter"},
-		{"nested multiple target", "(a, b), c = [1, 2]\n", "unsupported multiple assignment target"},
-		{"splat rescue classes", "begin\n  foo\nrescue *ERRORS\n  nil\nend\n", "splat rescue classes"},
-		{"safe navigation", "x = nil\nx&.to_s\n", "safe navigation"},
+		{"constant path operator", "A::X += 1\n", "operator assignment for constant paths"},
+		{"BEGIN block", "BEGIN { puts 1 }\n", "PreExecutionNode"},
+		{"END block", "END { puts 1 }\n", "PostExecutionNode"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

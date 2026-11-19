@@ -183,11 +183,64 @@ func (l *lowerer) lowerExpr(node parser.Node) (Expr, error) {
 		return &StringLiteral{exprBase: base(pos), Value: n.Unescaped.Value}, nil
 	case *parser.SymbolNode:
 		return &SymbolLiteral{exprBase: base(pos), Value: n.Unescaped.Value}, nil
+	case *parser.ImplicitNode:
+		return l.lowerExpr(n.Value)
 
 	case *parser.InterpolatedStringNode:
 		return l.lowerInterpolatedString(n)
+	case *parser.XStringNode:
+		return &Call{
+			exprBase: base(pos),
+			Name:     "`",
+			Args:     []Expr{&StringLiteral{exprBase: base(pos), Value: n.Unescaped.Value}},
+		}, nil
+	case *parser.InterpolatedXStringNode:
+		parts, err := l.lowerStringParts(n.Parts)
+		if err != nil {
+			return nil, err
+		}
+		return &Call{
+			exprBase: base(pos),
+			Name:     "`",
+			Args:     []Expr{&InterpolatedString{exprBase: base(pos), Parts: parts}},
+		}, nil
 	case *parser.InterpolatedSymbolNode:
-		return nil, l.errorf(n, "interpolated symbols are not supported yet")
+		parts, err := l.lowerStringParts(n.Parts)
+		if err != nil {
+			return nil, err
+		}
+		return &SymbolInterpolation{exprBase: base(pos), Parts: parts}, nil
+	case *parser.RegularExpressionNode:
+		return &RegexLiteral{
+			exprBase: base(pos),
+			Source:   n.Unescaped.Value,
+			Flags:    regexFlags(n),
+		}, nil
+	case *parser.InterpolatedRegularExpressionNode:
+		parts, err := l.lowerStringParts(n.Parts)
+		if err != nil {
+			return nil, err
+		}
+		return &RegexInterpolation{exprBase: base(pos), Parts: parts, Flags: regexFlags(n)}, nil
+	case *parser.RationalNode:
+		args := []Expr{&IntegerLiteral{exprBase: base(pos), Value: n.Numerator}}
+		if n.Denominator != 1 {
+			args = append(args, &IntegerLiteral{exprBase: base(pos), Value: n.Denominator})
+		}
+		return &Call{exprBase: base(pos), Name: "Rational", Args: args}, nil
+	case *parser.ImaginaryNode:
+		numeric, err := l.lowerExpr(n.Numeric)
+		if err != nil {
+			return nil, err
+		}
+		return &Call{
+			exprBase: base(pos),
+			Name:     "Complex",
+			Args: []Expr{
+				&IntegerLiteral{exprBase: base(pos), Value: 0},
+				numeric,
+			},
+		}, nil
 
 	case *parser.LocalVariableReadNode:
 		return &LocalRead{exprBase: base(pos), Name: n.Name, Depth: int(n.Depth)}, nil
@@ -413,8 +466,13 @@ func (l *lowerer) lowerExpr(node parser.Node) (Expr, error) {
 	case *parser.ArrayNode:
 		elements := make([]Expr, 0, len(n.Elements))
 		for _, element := range n.Elements {
-			if _, ok := element.(*parser.SplatNode); ok {
-				return nil, l.errorf(element, "array splats are not supported yet")
+			if splat, ok := element.(*parser.SplatNode); ok {
+				value, err := l.lowerExpr(splat.Expression)
+				if err != nil {
+					return nil, err
+				}
+				elements = append(elements, &SplatArg{exprBase: base(l.pos(element)), Value: value})
+				continue
 			}
 			expr, err := l.lowerExpr(element)
 			if err != nil {
@@ -427,33 +485,43 @@ func (l *lowerer) lowerExpr(node parser.Node) (Expr, error) {
 	case *parser.HashNode:
 		pairs := make([]HashPair, 0, len(n.Elements))
 		for _, element := range n.Elements {
-			assoc, ok := element.(*parser.AssocNode)
-			if !ok {
-				return nil, l.errorf(element, "hash splats are not supported yet")
+			switch entry := element.(type) {
+			case *parser.AssocNode:
+				key, err := l.lowerExpr(entry.Key)
+				if err != nil {
+					return nil, err
+				}
+				value, err := l.lowerExpr(entry.Value)
+				if err != nil {
+					return nil, err
+				}
+				pairs = append(pairs, HashPair{Key: key, Value: value})
+			case *parser.AssocSplatNode:
+				value, err := l.lowerExpr(entry.Value)
+				if err != nil {
+					return nil, err
+				}
+				pairs = append(pairs, HashPair{Value: value})
+			default:
+				return nil, l.unsupported(element)
 			}
-			key, err := l.lowerExpr(assoc.Key)
-			if err != nil {
-				return nil, err
-			}
-			value, err := l.lowerExpr(assoc.Value)
-			if err != nil {
-				return nil, err
-			}
-			pairs = append(pairs, HashPair{Key: key, Value: value})
 		}
 		return &HashLiteral{exprBase: base(pos), Pairs: pairs}, nil
 
 	case *parser.RangeNode:
-		if n.Left == nil || n.Right == nil {
-			return nil, l.errorf(n, "beginless and endless ranges are not supported yet")
+		var low, high Expr
+		var err error
+		if n.Left != nil {
+			low, err = l.lowerExpr(n.Left)
+			if err != nil {
+				return nil, err
+			}
 		}
-		low, err := l.lowerExpr(n.Left)
-		if err != nil {
-			return nil, err
-		}
-		high, err := l.lowerExpr(n.Right)
-		if err != nil {
-			return nil, err
+		if n.Right != nil {
+			high, err = l.lowerExpr(n.Right)
+			if err != nil {
+				return nil, err
+			}
 		}
 		return &RangeLiteral{exprBase: base(pos), Low: low, High: high, Exclusive: n.IsEXCLUDE_END()}, nil
 
@@ -533,28 +601,31 @@ func (l *lowerer) lowerExpr(node parser.Node) (Expr, error) {
 		return l.lowerDef(n)
 
 	case *parser.ReturnNode:
-		value, err := l.lowerSingleArgument(n.Arguments)
+		value, err := l.lowerMultiValue(n.Arguments)
 		if err != nil {
 			return nil, err
 		}
 		return &ReturnExpr{exprBase: base(pos), Value: value}, nil
 	case *parser.BreakNode:
-		value, err := l.lowerSingleArgument(n.Arguments)
+		value, err := l.lowerMultiValue(n.Arguments)
 		if err != nil {
 			return nil, err
 		}
 		return &BreakExpr{exprBase: base(pos), Value: value}, nil
 	case *parser.NextNode:
-		value, err := l.lowerSingleArgument(n.Arguments)
+		value, err := l.lowerMultiValue(n.Arguments)
 		if err != nil {
 			return nil, err
 		}
 		return &NextExpr{exprBase: base(pos), Value: value}, nil
 
 	case *parser.YieldNode:
-		args, err := l.lowerArguments(n.Arguments)
+		args, keywords, blockArg, forwardAll, err := l.lowerCallParts(n.Arguments)
 		if err != nil {
 			return nil, err
+		}
+		if len(keywords) > 0 || blockArg != nil || forwardAll {
+			return nil, l.errorf(n, "keyword or block arguments to yield are not supported")
 		}
 		return &YieldExpr{exprBase: base(pos), Args: args}, nil
 
@@ -725,18 +796,63 @@ func (l *lowerer) lowerExpr(node parser.Node) (Expr, error) {
 	case *parser.ForwardingSuperNode:
 		return l.lowerForwardingSuper(n)
 	case *parser.DefinedNode:
-		return nil, l.errorf(n, "defined? is not supported yet")
-	case *parser.RegularExpressionNode, *parser.InterpolatedRegularExpressionNode,
-		*parser.MatchPredicateNode, *parser.MatchRequiredNode:
-		return nil, l.errorf(n, "regular expressions are not supported yet")
-	case *parser.NumberedReferenceReadNode, *parser.ItLocalVariableReadNode:
-		return nil, l.errorf(n, "numbered block parameters are not supported yet")
+		value, err := l.lowerExpr(n.Value)
+		if err != nil {
+			return nil, err
+		}
+		return &Call{exprBase: base(pos), Name: "defined?", Args: []Expr{value}}, nil
+	case *parser.MatchPredicateNode, *parser.MatchRequiredNode:
+		return nil, l.errorf(n, "regular expression matching is not supported yet")
+	case *parser.NumberedReferenceReadNode:
+		return &GlobalRead{exprBase: base(pos), Name: fmt.Sprintf("$%d", n.Number)}, nil
+	case *parser.BackReferenceReadNode:
+		return &GlobalRead{exprBase: base(pos), Name: n.Name}, nil
+	case *parser.MatchWriteNode:
+		call, err := l.lowerCall(n.Call)
+		if err != nil {
+			return nil, err
+		}
+		targets := make([]MultiTarget, 0, len(n.Targets))
+		for _, node := range n.Targets {
+			target, err := l.lowerMultiTarget(node)
+			if err != nil {
+				return nil, err
+			}
+			targets = append(targets, target)
+		}
+		return &MatchWriteExpr{exprBase: base(pos), Call: call, Targets: targets}, nil
+	case *parser.ItLocalVariableReadNode:
+		return nil, l.errorf(n, "the 'it' block parameter is not supported yet")
 	case *parser.SourceFileNode:
-		return nil, l.errorf(n, "__FILE__ is not supported yet")
+		return &StringLiteral{exprBase: base(pos), Value: l.source.File}, nil
 	case *parser.SourceLineNode:
-		return nil, l.errorf(n, "__LINE__ is not supported yet")
+		return &IntegerLiteral{exprBase: base(pos), Value: int64(l.pos(n).Line)}, nil
 	case *parser.SourceEncodingNode:
-		return nil, l.errorf(n, "__ENCODING__ is not supported yet")
+		return &Call{exprBase: base(pos), Name: "__ENCODING__"}, nil
+	case *parser.ShareableConstantNode:
+		return l.lowerExpr(n.Write)
+	case *parser.ConstantPathWriteNode:
+		if n.Target == nil || n.Target.Name == nil {
+			return nil, l.errorf(n, "unsupported constant path target")
+		}
+		var parent Expr
+		if n.Target.Parent != nil {
+			var err error
+			parent, err = l.lowerExpr(n.Target.Parent)
+			if err != nil {
+				return nil, err
+			}
+		}
+		value, err := l.lowerExpr(n.Value)
+		if err != nil {
+			return nil, err
+		}
+		return &ConstantPathWrite{
+			exprBase: base(pos),
+			Parent:   parent,
+			Name:     *n.Target.Name,
+			Value:    value,
+		}, nil
 	case *parser.MissingNode:
 		return nil, l.errorf(n, "incomplete expression")
 	}
@@ -754,8 +870,13 @@ func (l *lowerer) lowerBegin(n *parser.BeginNode) (Expr, error) {
 	for rescue := n.RescueClause; rescue != nil; rescue = rescue.Subsequent {
 		clause := RescueClause{Pos: l.pos(rescue)}
 		for _, exception := range rescue.Exceptions {
-			if _, ok := exception.(*parser.SplatNode); ok {
-				return nil, l.errorf(exception, "splat rescue classes are not supported yet")
+			if splat, ok := exception.(*parser.SplatNode); ok {
+				value, err := l.lowerExpr(splat.Expression)
+				if err != nil {
+					return nil, err
+				}
+				clause.Classes = append(clause.Classes, &SplatArg{exprBase: base(l.pos(exception)), Value: value})
+				continue
 			}
 			expr, err := l.lowerExpr(exception)
 			if err != nil {
@@ -1035,7 +1156,48 @@ func (l *lowerer) lowerPattern(node parser.Node) (Pattern, error) {
 		return l.lowerPattern(n.Value)
 
 	case *parser.HashPatternNode:
-		return nil, l.errorf(n, "hash patterns are not supported yet")
+		var constant Expr
+		if n.Constant != nil {
+			var err error
+			constant, err = l.lowerExpr(n.Constant)
+			if err != nil {
+				return nil, err
+			}
+		}
+		entries := make([]HashPatternEntry, 0, len(n.Elements))
+		for _, element := range n.Elements {
+			assoc, ok := element.(*parser.AssocNode)
+			if !ok {
+				return nil, l.errorf(element, "unsupported hash pattern element")
+			}
+			symbol, ok := assoc.Key.(*parser.SymbolNode)
+			if !ok {
+				return nil, l.errorf(assoc.Key, "only symbol keys are supported in hash patterns")
+			}
+			value, err := l.lowerPattern(assoc.Value)
+			if err != nil {
+				return nil, err
+			}
+			entries = append(entries, HashPatternEntry{Key: symbol.Unescaped.Value, Value: value})
+		}
+		var rest *MultiTarget
+		if n.Rest != nil {
+			splat, ok := n.Rest.(*parser.AssocSplatNode)
+			if !ok {
+				return nil, l.unsupported(n.Rest)
+			}
+			target, err := l.lowerMultiTarget(splat.Value)
+			if err != nil {
+				return nil, err
+			}
+			rest = &target
+		}
+		return &HashPattern{
+			patternBase: pattern(pos),
+			Constant:    constant,
+			Entries:     entries,
+			Rest:        rest,
+		}, nil
 	case *parser.FindPatternNode:
 		return nil, l.errorf(n, "find patterns are not supported yet")
 	case *parser.AlternationPatternNode:
@@ -1077,11 +1239,27 @@ func (l *lowerer) lowerParameters(params *parser.ParametersNode) ([]Param, error
 	}
 	var out []Param
 	for _, node := range params.Requireds {
-		required, ok := node.(*parser.RequiredParameterNode)
-		if !ok {
+		switch required := node.(type) {
+		case *parser.RequiredParameterNode:
+			out = append(out, Param{Pos: l.pos(node), Name: required.Name, Kind: ParamRequired})
+		case *parser.MultiTargetNode:
+			lefts, rest, posts, err := l.lowerMultiTargetNode(required)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, Param{
+				Pos:  l.pos(node),
+				Kind: ParamDestructure,
+				Destructure: &MultiTarget{
+					Kind:  TargetNested,
+					Lefts: lefts,
+					Rest:  rest,
+					Posts: posts,
+				},
+			})
+		default:
 			return nil, l.unsupported(node)
 		}
-		out = append(out, Param{Pos: l.pos(node), Name: required.Name, Kind: ParamRequired})
 	}
 	for _, node := range params.Optionals {
 		optional, ok := node.(*parser.OptionalParameterNode)
@@ -1095,15 +1273,17 @@ func (l *lowerer) lowerParameters(params *parser.ParametersNode) ([]Param, error
 		out = append(out, Param{Pos: l.pos(node), Name: optional.Name, Kind: ParamOptional, Default: value})
 	}
 	if params.Rest != nil {
-		rest, ok := params.Rest.(*parser.RestParameterNode)
-		if !ok {
+		switch rest := params.Rest.(type) {
+		case *parser.ImplicitRestNode:
+		case *parser.RestParameterNode:
+			name := ""
+			if rest.Name != nil {
+				name = *rest.Name
+			}
+			out = append(out, Param{Pos: l.pos(rest), Name: name, Kind: ParamRest})
+		default:
 			return nil, l.unsupported(params.Rest)
 		}
-		name := ""
-		if rest.Name != nil {
-			name = *rest.Name
-		}
-		out = append(out, Param{Pos: l.pos(rest), Name: name, Kind: ParamRest})
 	}
 	for _, node := range params.Posts {
 		post, ok := node.(*parser.RequiredParameterNode)
@@ -1159,6 +1339,22 @@ func (l *lowerer) lowerParameters(params *parser.ParametersNode) ([]Param, error
 	return out, nil
 }
 
+func (l *lowerer) keywordHashPositional(node *parser.KeywordHashNode) bool {
+	for _, element := range node.Elements {
+		assoc, ok := element.(*parser.AssocNode)
+		if !ok {
+			return false
+		}
+		if assoc.OperatorLoc != nil {
+			return true
+		}
+		if _, ok := assoc.Key.(*parser.SymbolNode); !ok {
+			return true
+		}
+	}
+	return false
+}
+
 func (l *lowerer) binaryAssign(read Expr, op string, value Expr, pos Position, write func(Expr) Expr) Expr {
 	switch op {
 	case "||":
@@ -1172,9 +1368,6 @@ func (l *lowerer) binaryAssign(read Expr, op string, value Expr, pos Position, w
 }
 
 func (l *lowerer) lowerCall(n *parser.CallNode) (Expr, error) {
-	if n.IsSAFE_NAVIGATION() {
-		return nil, l.errorf(n, "safe navigation is not supported yet")
-	}
 	var receiver Expr
 	if n.Receiver != nil {
 		var err error
@@ -1208,14 +1401,15 @@ func (l *lowerer) lowerCall(n *parser.CallNode) (Expr, error) {
 		return nil, l.errorf(n.Block, "block argument forwarding is not supported yet")
 	}
 	return &Call{
-		exprBase:   base(l.pos(n)),
-		Receiver:   receiver,
-		Name:       n.Name,
-		Args:       args,
-		Keywords:   keywords,
-		ForwardAll: forwardAll,
-		Block:      block,
-		BlockArg:   blockArg,
+		exprBase:       base(l.pos(n)),
+		Receiver:       receiver,
+		Name:           n.Name,
+		Args:           args,
+		Keywords:       keywords,
+		ForwardAll:     forwardAll,
+		SafeNavigation: n.IsSAFE_NAVIGATION(),
+		Block:          block,
+		BlockArg:       blockArg,
 	}, nil
 }
 
@@ -1236,6 +1430,26 @@ func (l *lowerer) lowerCallParts(args *parser.ArgumentsNode) ([]Expr, []KeywordA
 			}
 			positional = append(positional, &SplatArg{exprBase: base(l.pos(node)), Value: value})
 		case *parser.KeywordHashNode:
+			if l.keywordHashPositional(arg) {
+				var pairs []HashPair
+				for _, element := range arg.Elements {
+					assoc, ok := element.(*parser.AssocNode)
+					if !ok {
+						return nil, nil, nil, false, l.errorf(element, "hash splats in positional hash arguments are not supported")
+					}
+					key, err := l.lowerExpr(assoc.Key)
+					if err != nil {
+						return nil, nil, nil, false, err
+					}
+					value, err := l.lowerExpr(assoc.Value)
+					if err != nil {
+						return nil, nil, nil, false, err
+					}
+					pairs = append(pairs, HashPair{Key: key, Value: value})
+				}
+				positional = append(positional, &HashLiteral{exprBase: base(l.pos(arg)), Pairs: pairs})
+				continue
+			}
 			for _, element := range arg.Elements {
 				switch entry := element.(type) {
 				case *parser.AssocNode:
@@ -1416,13 +1630,23 @@ func (l *lowerer) lowerSuper(n *parser.SuperNode) (Expr, error) {
 	}
 	var block *Block
 	if n.Block != nil {
-		blockNode, ok := n.Block.(*parser.BlockNode)
-		if !ok {
+		switch b := n.Block.(type) {
+		case *parser.BlockNode:
+			block, err = l.lowerBlock(b)
+			if err != nil {
+				return nil, err
+			}
+		case *parser.BlockArgumentNode:
+			if b.Expression == nil {
+				blockArg = &BlockSlotExpr{exprBase: base(l.pos(b))}
+			} else {
+				blockArg, err = l.lowerExpr(b.Expression)
+				if err != nil {
+					return nil, err
+				}
+			}
+		default:
 			return nil, l.errorf(n.Block, "block argument forwarding is not supported yet")
-		}
-		block, err = l.lowerBlock(blockNode)
-		if err != nil {
-			return nil, err
 		}
 	}
 	return &SuperExpr{
@@ -1457,16 +1681,19 @@ func (l *lowerer) lowerMultiWrite(n *parser.MultiWriteNode) (Expr, error) {
 	}
 	var rest *MultiTarget
 	if n.Rest != nil {
-		splat, ok := n.Rest.(*parser.SplatNode)
-		if !ok {
-			return nil, l.unsupported(n.Rest)
-		}
-		if splat.Expression != nil {
-			target, err := l.lowerMultiTarget(splat.Expression)
-			if err != nil {
-				return nil, err
+		switch r := n.Rest.(type) {
+		case *parser.ImplicitRestNode:
+			// `a, = value` has a trailing comma but no rest binding.
+		case *parser.SplatNode:
+			if r.Expression != nil {
+				target, err := l.lowerMultiTarget(r.Expression)
+				if err != nil {
+					return nil, err
+				}
+				rest = &target
 			}
-			rest = &target
+		default:
+			return nil, l.unsupported(n.Rest)
 		}
 	}
 	posts := make([]MultiTarget, 0, len(n.Rights))
@@ -1498,6 +1725,8 @@ func (l *lowerer) lowerMultiTarget(node parser.Node) (MultiTarget, error) {
 	switch target := node.(type) {
 	case *parser.LocalVariableTargetNode:
 		return MultiTarget{Pos: pos, Kind: TargetLocal, Name: target.Name, Depth: int(target.Depth)}, nil
+	case *parser.RequiredParameterNode:
+		return MultiTarget{Pos: pos, Kind: TargetLocal, Name: target.Name}, nil
 	case *parser.GlobalVariableTargetNode:
 		return MultiTarget{Pos: pos, Kind: TargetGlobal, Name: target.Name}, nil
 	case *parser.InstanceVariableTargetNode:
@@ -1516,9 +1745,51 @@ func (l *lowerer) lowerMultiTarget(node parser.Node) (MultiTarget, error) {
 			return MultiTarget{}, err
 		}
 		return MultiTarget{Pos: pos, Kind: TargetCall, Name: target.Name, Receiver: receiver}, nil
+	case *parser.MultiTargetNode:
+		lefts, rest, posts, err := l.lowerMultiTargetNode(target)
+		if err != nil {
+			return MultiTarget{}, err
+		}
+		return MultiTarget{Pos: pos, Kind: TargetNested, Lefts: lefts, Rest: rest, Posts: posts}, nil
 	default:
 		return MultiTarget{}, l.errorf(node, "unsupported multiple assignment target: %s", nodeName(node))
 	}
+}
+
+func (l *lowerer) lowerMultiTargetNode(multi *parser.MultiTargetNode) ([]MultiTarget, *MultiTarget, []MultiTarget, error) {
+	lefts := make([]MultiTarget, 0, len(multi.Lefts))
+	for _, left := range multi.Lefts {
+		target, err := l.lowerMultiTarget(left)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		lefts = append(lefts, target)
+	}
+	var rest *MultiTarget
+	if multi.Rest != nil {
+		switch r := multi.Rest.(type) {
+		case *parser.ImplicitRestNode:
+		case *parser.SplatNode:
+			if r.Expression != nil {
+				target, err := l.lowerMultiTarget(r.Expression)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				rest = &target
+			}
+		default:
+			return nil, nil, nil, l.unsupported(multi.Rest)
+		}
+	}
+	posts := make([]MultiTarget, 0, len(multi.Rights))
+	for _, right := range multi.Rights {
+		target, err := l.lowerMultiTarget(right)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		posts = append(posts, target)
+	}
+	return lefts, rest, posts, nil
 }
 
 func (l *lowerer) lowerIndexParts(receiverNode parser.Node, arguments *parser.ArgumentsNode, block *parser.BlockArgumentNode) (Expr, []Expr, error) {
@@ -1578,16 +1849,18 @@ func (l *lowerer) lowerForTargets(node parser.Node) ([]MultiTarget, *MultiTarget
 	}
 	var rest *MultiTarget
 	if multi.Rest != nil {
-		splat, ok := multi.Rest.(*parser.SplatNode)
-		if !ok {
-			return nil, nil, nil, l.unsupported(multi.Rest)
-		}
-		if splat.Expression != nil {
-			target, err := l.lowerMultiTarget(splat.Expression)
-			if err != nil {
-				return nil, nil, nil, err
+		switch r := multi.Rest.(type) {
+		case *parser.ImplicitRestNode:
+		case *parser.SplatNode:
+			if r.Expression != nil {
+				target, err := l.lowerMultiTarget(r.Expression)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				rest = &target
 			}
-			rest = &target
+		default:
+			return nil, nil, nil, l.unsupported(multi.Rest)
 		}
 	}
 	posts := make([]MultiTarget, 0, len(multi.Rights))
@@ -1668,43 +1941,103 @@ func (l *lowerer) lowerArguments(args *parser.ArgumentsNode) ([]Expr, error) {
 	return out, nil
 }
 
-func (l *lowerer) lowerSingleArgument(args *parser.ArgumentsNode) (Expr, error) {
+func (l *lowerer) lowerMultiValue(args *parser.ArgumentsNode) (Expr, error) {
 	if args == nil || len(args.Arguments) == 0 {
 		return nil, nil
 	}
-	if len(args.Arguments) > 1 {
-		return nil, l.errorf(args, "multiple return values are not supported yet")
+	if len(args.Arguments) == 1 {
+		if splat, ok := args.Arguments[0].(*parser.SplatNode); ok {
+			value, err := l.lowerExpr(splat.Expression)
+			if err != nil {
+				return nil, err
+			}
+			return &ArrayLiteral{
+				exprBase: base(l.pos(splat)),
+				Elements: []Expr{&SplatArg{exprBase: base(l.pos(splat)), Value: value}},
+			}, nil
+		}
+		return l.lowerExpr(args.Arguments[0])
 	}
-	return l.lowerExpr(args.Arguments[0])
+	elements := make([]Expr, 0, len(args.Arguments))
+	for _, node := range args.Arguments {
+		if splat, ok := node.(*parser.SplatNode); ok {
+			value, err := l.lowerExpr(splat.Expression)
+			if err != nil {
+				return nil, err
+			}
+			elements = append(elements, &SplatArg{exprBase: base(l.pos(node)), Value: value})
+			continue
+		}
+		expr, err := l.lowerExpr(node)
+		if err != nil {
+			return nil, err
+		}
+		elements = append(elements, expr)
+	}
+	return &ArrayLiteral{exprBase: base(l.pos(args)), Elements: elements}, nil
 }
 
 func (l *lowerer) lowerInterpolatedString(n *parser.InterpolatedStringNode) (Expr, error) {
-	parts := make([]Expr, 0, len(n.Parts))
-	for _, part := range n.Parts {
+	parts, err := l.lowerStringParts(n.Parts)
+	if err != nil {
+		return nil, err
+	}
+	return &InterpolatedString{exprBase: base(l.pos(n)), Parts: parts}, nil
+}
+
+func (l *lowerer) lowerStringParts(parts []parser.Node) ([]Expr, error) {
+	out := make([]Expr, 0, len(parts))
+	for _, part := range parts {
 		switch p := part.(type) {
 		case *parser.StringNode:
-			parts = append(parts, &StringLiteral{exprBase: base(l.pos(p)), Value: p.Unescaped.Value})
+			out = append(out, &StringLiteral{exprBase: base(l.pos(p)), Value: p.Unescaped.Value})
+		case *parser.InterpolatedStringNode:
+			nested, err := l.lowerStringParts(p.Parts)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, nested...)
 		case *parser.EmbeddedStatementsNode:
 			body, err := l.lowerStatements(p.Statements)
 			if err != nil {
 				return nil, err
 			}
 			if len(body) == 0 {
-				parts = append(parts, &StringLiteral{exprBase: base(l.pos(p)), Value: ""})
+				out = append(out, &StringLiteral{exprBase: base(l.pos(p)), Value: ""})
 			} else {
-				parts = append(parts, statementsExpr(body, l.pos(p)))
+				out = append(out, statementsExpr(body, l.pos(p)))
 			}
 		case *parser.EmbeddedVariableNode:
 			expr, err := l.lowerExpr(p.Variable)
 			if err != nil {
 				return nil, err
 			}
-			parts = append(parts, expr)
+			out = append(out, expr)
 		default:
 			return nil, l.unsupported(part)
 		}
 	}
-	return &InterpolatedString{exprBase: base(l.pos(n)), Parts: parts}, nil
+	return out, nil
+}
+
+type regexFlagNode interface {
+	IsIGNORE_CASE() bool
+	IsEXTENDED() bool
+	IsMULTI_LINE() bool
+}
+
+func regexFlags(node regexFlagNode) string {
+	flags := ""
+	if node.IsIGNORE_CASE() {
+		flags += "i"
+	}
+	if node.IsMULTI_LINE() {
+		flags += "m"
+	}
+	if node.IsEXTENDED() {
+		flags += "x"
+	}
+	return flags
 }
 
 func statementsExpr(body []Expr, pos Position) Expr {

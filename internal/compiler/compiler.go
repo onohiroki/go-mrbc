@@ -109,6 +109,7 @@ func (c *Compiler) compileMethod(parent *scope, def *frontend.DefExpr) *bytecode
 	s.emit(bytecode.OpENTER, aspec)
 	c.emitOptionalDefaults(s)
 	c.emitKeywordInit(s)
+	c.emitParamDestructure(s)
 
 	sp0 := s.sp
 	if len(def.Body) == 0 {
@@ -137,6 +138,7 @@ func (c *Compiler) compileBlock(parent *scope, block *frontend.Block) *bytecode.
 	s.emit(bytecode.OpENTER, aspec)
 	c.emitOptionalDefaults(s)
 	c.emitKeywordInit(s)
+	c.emitParamDestructure(s)
 
 	sp0 := s.sp
 	redoLabel := s.asm.newLabel()
@@ -170,6 +172,7 @@ func (c *Compiler) compileLambda(parent *scope, lambda *frontend.LambdaExpr) *by
 	s.emit(bytecode.OpENTER, aspec)
 	c.emitOptionalDefaults(s)
 	c.emitKeywordInit(s)
+	c.emitParamDestructure(s)
 
 	sp0 := s.sp
 	redoLabel := s.asm.newLabel()
@@ -251,6 +254,24 @@ func (c *Compiler) emitOptionalDefaults(s *scope) {
 		s.sp = sp0
 	}
 	s.asm.bind(end)
+}
+
+func (c *Compiler) emitParamDestructure(s *scope) {
+	for _, param := range s.params {
+		if param.Kind != frontend.ParamDestructure || param.Destructure == nil {
+			continue
+		}
+		slot, ok := s.locals[param.Name]
+		if !ok {
+			c.fail(param.Pos, "compiler: unknown destructured parameter")
+			return
+		}
+		sp0 := s.sp
+		if !c.assignNested(s, *param.Destructure, slot) {
+			return
+		}
+		s.sp = sp0
+	}
 }
 
 func (c *Compiler) emitKeywordInit(s *scope) {

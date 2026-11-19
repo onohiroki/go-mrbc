@@ -24,9 +24,14 @@ English summary.
 - [x] `raise`, `begin` / `rescue` / `ensure`, `retry`, `redo`
 - [x] `alias` / `undef`
 - [x] Debug information (`-g`, LVAR/DBG)
-- [x] Pattern matching (value, variable, capture, array, guard, pin)
+- [x] Pattern matching (value, variable, capture, array, hash, guard, pin)
 - [x] Operator assignment on locals, globals, ivars, cvars, attributes, index
+- [x] Safe navigation, beginless/endless ranges, array/hash splats
+- [x] Interpolated symbols and xstrings, backreferences, `defined?`
+- [x] Nested multiple assignment and destructured parameters
+- [x] M5 compile-parity harness over mruby's test tree
 - [ ] Optimized opcodes
+- [ ] Alternation, find, and array-rest patterns
 
 ## M0 - Parser integration
 
@@ -82,6 +87,23 @@ information, and a practical pattern-matching subset are implemented.
 - Pattern matching extensions (hash, alternation, find, rest patterns).
 - `defined?`.
 - Performance improvements.
+
+Status: `defined?` and hash patterns are implemented. Alternation, find, and
+array-rest patterns remain. Optimized opcodes are not started.
+
+## M5 - Compatibility harness
+
+- Compile mruby's own test tree with both `mrbc` and `go-mrbc`.
+- Report files accepted by `mrbc` and rejected by `go-mrbc`.
+- Use the failures as the priority list for syntax support.
+
+Status: `cmd/compat` is implemented and run against `mruby/test` and
+`mruby/mrbgems`. The 2026-11-19 snapshot reports 237 files, 234 accepted by
+both, 0 gaps, and 3 files rejected by both compilers. See
+[compatibility-report.md](compatibility-report.md).
+
+The harness compares compilation only. Runtime behavior is covered by the
+conformance suite, including cases for modern syntax and destructuring.
 
 ## Parallel project: pure-Go mruby VM
 

@@ -82,6 +82,23 @@ type InterpolatedString struct {
 	Parts []Expr
 }
 
+type SymbolInterpolation struct {
+	exprBase
+	Parts []Expr
+}
+
+type RegexLiteral struct {
+	exprBase
+	Source string
+	Flags  string
+}
+
+type RegexInterpolation struct {
+	exprBase
+	Parts []Expr
+	Flags string
+}
+
 type LocalRead struct {
 	exprBase
 	Name  string
@@ -123,13 +140,14 @@ func (k KeywordArg) IsSplat() bool { return k.Key == nil }
 // Call is a method call. A nil Receiver means an implicit-self call.
 type Call struct {
 	exprBase
-	Receiver   Expr
-	Name       string
-	Args       []Expr // may contain *SplatArg
-	Keywords   []KeywordArg
-	ForwardAll bool
-	Block      *Block
-	BlockArg   Expr
+	Receiver       Expr
+	Name           string
+	Args           []Expr // may contain *SplatArg
+	Keywords       []KeywordArg
+	ForwardAll     bool
+	SafeNavigation bool
+	Block          *Block
+	BlockArg       Expr
 }
 
 func (c *Call) ImplicitSelf() bool { return c.Receiver == nil }
@@ -158,13 +176,15 @@ const (
 	ParamKeyword
 	ParamOptionalKeyword
 	ParamKeywordRest
+	ParamDestructure
 )
 
 type Param struct {
-	Pos     Position
-	Name    string
-	Kind    ParamKind
-	Default Expr
+	Pos         Position
+	Name        string
+	Kind        ParamKind
+	Default     Expr
+	Destructure *MultiTarget
 }
 
 type IfExpr struct {
@@ -273,6 +293,13 @@ type ConstantPathRead struct {
 	Name   string
 }
 
+type ConstantPathWrite struct {
+	exprBase
+	Parent Expr // nil for ::Name
+	Name   string
+	Value  Expr
+}
+
 type ClassDef struct {
 	exprBase
 	Name       string
@@ -322,6 +349,7 @@ const (
 	TargetConstant
 	TargetIndex
 	TargetCall
+	TargetNested
 )
 
 type MultiTarget struct {
@@ -331,6 +359,10 @@ type MultiTarget struct {
 	Depth    int
 	Receiver Expr
 	Args     []Expr
+
+	Lefts []MultiTarget
+	Rest  *MultiTarget
+	Posts []MultiTarget
 }
 
 type MultiWrite struct {
@@ -373,6 +405,12 @@ type AliasExpr struct {
 	exprBase
 	NewName string
 	OldName string
+}
+
+type MatchWriteExpr struct {
+	exprBase
+	Call    Expr
+	Targets []MultiTarget
 }
 
 type UndefExpr struct {
@@ -437,6 +475,18 @@ type ArrayPattern struct {
 	patternBase
 	Constant Expr
 	Elements []Pattern
+}
+
+type HashPatternEntry struct {
+	Key   string
+	Value Pattern
+}
+
+type HashPattern struct {
+	patternBase
+	Constant Expr
+	Entries  []HashPatternEntry
+	Rest     *MultiTarget
 }
 
 func pattern(pos Position) patternBase { return patternBase{Pos: pos} }

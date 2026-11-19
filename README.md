@@ -19,6 +19,10 @@ inheritance, `super`, instance/class variables, constants, keyword arguments,
 splats, lambdas, multiple assignment, exceptions, pattern matching, debug
 information, and `raise`.
 
+In addition, a compile-parity check over mruby's own test tree reports **zero
+files that `mrbc` accepts and `go-mrbc` rejects** (237 files, 2026-11-19). See
+[Compatibility report](docs/compatibility-report.md).
+
 | Component | Status |
 | --- | --- |
 | RITE 04.00 writer / reader | Implemented |
@@ -27,12 +31,13 @@ information, and `raise`.
 | Scalar expressions and control flow | Implemented |
 | Methods, blocks, and closures | Implemented |
 | Classes, modules, and inheritance | Implemented |
-| Keyword arguments, splats, lambdas | Implemented |
+| Keyword arguments, splats, forwarders | Implemented |
 | Multiple assignment | Implemented |
 | `begin` / `rescue` / `ensure` / `retry` | Implemented |
 | `alias` / `undef` | Implemented |
-| Pattern matching (`case` / `in`, subset) | Implemented |
+| Pattern matching (including hash patterns) | Implemented |
 | Debug information (`-g`, LVAR/DBG) | Implemented |
+| Regex literals (runtime gem required) | Compiled |
 | Peephole optimizer | Not planned initially |
 
 See [Compatibility](docs/compatibility.md) for the exact supported subset and
@@ -162,6 +167,7 @@ See [docs/architecture.md](docs/architecture.md) for details.
 - [Architecture](docs/architecture.md)
 - [Bytecode format](docs/bytecode-format.md)
 - [Compatibility](docs/compatibility.md)
+- [Compatibility report](docs/compatibility-report.md)
 - [Testing](docs/testing.md)
 - [Roadmap](docs/roadmap.md)
 - [Implementation plan (Japanese)](docs/implementation-plan.ja.md)
@@ -172,6 +178,7 @@ See [docs/architecture.md](docs/architecture.md) for details.
 make build     # build ./gomrbc
 make test      # unit tests and conformance tests
 make conformance
+make compat    # compile-parity check against mruby's test tree
 ```
 
 Conformance tests require mruby 4.0.0 and `mrbc` on `PATH`; see
