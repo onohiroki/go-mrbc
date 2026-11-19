@@ -196,7 +196,7 @@ func (s *scope) initLocals(locals []string) error {
 		case frontend.ParamKeywordRest:
 			hasKeywords = true
 			keywordRest = param
-		case frontend.ParamBlock:
+		case frontend.ParamBlock, frontend.ParamNoBlock:
 			blockParam = param
 		}
 	}
@@ -380,7 +380,7 @@ func (s *scope) effectiveDepth(depth int) int {
 }
 
 func (s *scope) enterAspec() (uint32, int) {
-	var req, opt, rest, post, keywords, keywordRest, block int
+	var req, opt, rest, post, keywords, keywordRest, block, noBlock int
 	for _, param := range s.params {
 		switch param.Kind {
 		case frontend.ParamRequired:
@@ -399,13 +399,15 @@ func (s *scope) enterAspec() (uint32, int) {
 			keywordRest = 1
 		case frontend.ParamBlock:
 			block = 1
+		case frontend.ParamNoBlock:
+			noBlock = 1
 		}
 	}
 	if req > 31 || opt > 31 || post > 31 || keywords > 31 || req+opt > 63 {
 		s.c.fail(frontend.Position{}, "compiler: too many formal arguments")
 		return 0, -1
 	}
-	aspec := uint32(req<<18 | opt<<13 | rest<<12 | post<<7 | keywords<<2 | keywordRest<<1 | block)
+	aspec := uint32(noBlock<<23 | req<<18 | opt<<13 | rest<<12 | post<<7 | keywords<<2 | keywordRest<<1 | block)
 	ainfo := ((req + opt) & 0x3f) << 7
 	ainfo |= rest << 6
 	ainfo |= post << 1

@@ -59,7 +59,7 @@ func TestConformance(t *testing.T) {
 			args := readArgs(t, filepath.Join(dir, "args.txt"))
 
 			reference := filepath.Join(tmp, "reference.mrb")
-			result, err := toolchain.Run(mrbcPath, "--no-optimize", "-o", reference, mainPath)
+			result, err := toolchain.Run(mrbcPath, "-o", reference, mainPath)
 			if err != nil {
 				t.Fatalf("run mrbc: %v", err)
 			}

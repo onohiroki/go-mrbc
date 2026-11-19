@@ -1214,8 +1214,11 @@ func (c *Compiler) compileBegin(s *scope, e *frontend.BeginExpr, dst int) {
 	}
 
 	sp0 := s.sp
+	redoLabel := s.asm.newLabel()
 	beginLabel := s.asm.newLabel()
 	after := s.asm.newLabel()
+	s.asm.bind(redoLabel)
+	s.emit(bytecode.OpNOP)
 	s.asm.bind(beginLabel)
 
 	var rescueEnd, rescueTarget label
@@ -1240,7 +1243,7 @@ func (c *Compiler) compileBegin(s *scope, e *frontend.BeginExpr, dst int) {
 			s.asm.bind(rescueEnd)
 			s.asm.jmp(elseLabel)
 			s.asm.bind(rescueTarget)
-			c.compileRescueHandlers(s, e, dst, beginLabel, after)
+			c.compileRescueHandlers(s, e, dst, beginLabel, redoLabel, after)
 			s.asm.bind(elseLabel)
 			c.compileBody(s, e.Else, dst)
 			s.asm.jmp(after)
@@ -1248,7 +1251,7 @@ func (c *Compiler) compileBegin(s *scope, e *frontend.BeginExpr, dst int) {
 			s.asm.bind(rescueEnd)
 			s.asm.jmp(after)
 			s.asm.bind(rescueTarget)
-			c.compileRescueHandlers(s, e, dst, beginLabel, after)
+			c.compileRescueHandlers(s, e, dst, beginLabel, redoLabel, after)
 		}
 	}
 
@@ -1269,7 +1272,7 @@ func (c *Compiler) compileBegin(s *scope, e *frontend.BeginExpr, dst int) {
 	s.sp = sp0
 }
 
-func (c *Compiler) compileRescueHandlers(s *scope, e *frontend.BeginExpr, dst int, beginLabel, after label) {
+func (c *Compiler) compileRescueHandlers(s *scope, e *frontend.BeginExpr, dst int, beginLabel, redoLabel, after label) {
 	exc := s.alloc(1)
 	s.emit(bytecode.OpEXCEPT, uint32(exc))
 	sp0 := s.sp
@@ -1318,7 +1321,12 @@ func (c *Compiler) compileRescueHandlers(s *scope, e *frontend.BeginExpr, dst in
 		}
 		previous := s.rescue
 		s.rescue = &rescueContext{retryLabel: beginLabel}
+		prevRedo, prevHasRedo := s.redoTarget, s.hasRedo
+		if !s.hasRedo {
+			s.redoTarget, s.hasRedo = redoLabel, true
+		}
 		c.compileBody(s, clause.Body, dst)
+		s.redoTarget, s.hasRedo = prevRedo, prevHasRedo
 		s.rescue = previous
 		s.asm.jmp(after)
 		s.asm.bind(nextLabel)
@@ -1555,21 +1563,34 @@ func (c *Compiler) compileForwardAll(s *scope, e *frontend.Call, dst int) {
 	keywordReg := base + 2
 	blockReg := base + 3
 
-	s.emit(bytecode.OpLOADNIL, uint32(arrayReg))
+	c.buildArgArray(s, e.Args, arrayReg)
 	c.emitMethodSlot(s, keywordReg, info.restSlot)
 	s.emit(bytecode.OpARYCAT, uint32(arrayReg))
 
-	s.emit(bytecode.OpHASH, uint32(keywordReg), 0)
-	c.emitMethodSlot(s, blockReg, info.keywordSlot)
-	s.emit(bytecode.OpHASHCAT, uint32(keywordReg))
-
-	c.emitMethodSlot(s, blockReg, info.blockSlot)
-
-	op := bytecode.OpSENDB
-	if e.ImplicitSelf() {
-		op = bytecode.OpSSENDB
+	keywordCount := 0
+	if info.keywordSlot >= 0 {
+		s.emit(bytecode.OpHASH, uint32(keywordReg), 0)
+		c.emitMethodSlot(s, blockReg, info.keywordSlot)
+		s.emit(bytecode.OpHASHCAT, uint32(keywordReg))
+		keywordCount = 15
 	}
-	argInfo := uint32(15) | 15<<4
+
+	hasBlock := info.blockSlot >= 0
+	if hasBlock {
+		c.emitMethodSlot(s, blockReg, info.blockSlot)
+	}
+	op := bytecode.OpSEND
+	if e.ImplicitSelf() {
+		op = bytecode.OpSSEND
+	}
+	if hasBlock {
+		if e.ImplicitSelf() {
+			op = bytecode.OpSSENDB
+		} else {
+			op = bytecode.OpSENDB
+		}
+	}
+	argInfo := uint32(15) | uint32(keywordCount)<<4
 	s.emit(op, uint32(base), s.sym(e.Name), argInfo)
 	s.emitMove(dst, base)
 }
@@ -1642,16 +1663,33 @@ func (c *Compiler) compileSuper(s *scope, e *frontend.SuperExpr, dst int) {
 	if s.method != nil {
 		info = s.method.methodInfo
 	}
-	if info == nil && e.Forwarding {
-		c.failExpr(e, "super is not available here")
-		return
-	}
 	if info != nil && s.yieldLevel < 0 {
 		c.failExpr(e, "super is not available here")
 		return
 	}
 
 	if e.Forwarding {
+		if info == nil {
+			// A top-level block has no method to forward to. mruby still
+			// compiles `super`, and the VM raises NoMethodError at runtime.
+			base := s.alloc(2)
+			s.emit(bytecode.OpLOADNIL, uint32(base))
+			if e.Block != nil {
+				child := c.compileBlock(s, e.Block)
+				if child == nil {
+					return
+				}
+				index := s.irep.AddChild(child)
+				s.emit(bytecode.OpBLOCK, uint32(base+1), uint32(index))
+			} else if e.BlockArg != nil {
+				c.compileExpr(s, e.BlockArg, base+1)
+			} else {
+				s.emit(bytecode.OpLOADNIL, uint32(base+1))
+			}
+			s.emit(bytecode.OpSUPER, uint32(base), 0)
+			s.emitMove(dst, base)
+			return
+		}
 		level := s.yieldLevel
 		if info.ainfo > 0 {
 			if info.ainfo&1 != 0 && len(info.keywordParams) > 0 && !info.hasKeywordRest {
@@ -1729,6 +1767,9 @@ func (c *Compiler) compileSuper(s *scope, e *frontend.SuperExpr, dst int) {
 	}
 
 	base := s.alloc(1 + positionalRegs + keywordRegs + 1)
+	if info == nil {
+		s.emit(bytecode.OpLOADNIL, uint32(base))
+	}
 	if hasPositionalSplat || n > 14 {
 		c.buildArgArray(s, e.Args, base+1)
 	} else {

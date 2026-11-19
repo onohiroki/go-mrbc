@@ -5,26 +5,24 @@ against mruby 4.0.0. Compile parity checks which files both compilers accept.
 Runtime parity compiles the same files with both compilers and compares what
 the resulting binaries print and return.
 
-The primary measurement uses the **mruby 4.0.0 tag**. A second measurement
-uses the local development tree (`4.0.0-3011-gdbab56510`) to track syntax that
-is newer than the target release.
+The primary measurement uses the **mruby 4.0.0 tag** and the **default
+`mrbc`** as the reference compiler. A second measurement uses the local
+development tree (`4.0.0-3011-gdbab56510`) to track syntax and behavior that is
+newer than the target release.
 
 ## Compile parity: mruby 4.0.0 tag
 
-- Date: 2026-11-19
+- Date: 2026-11-20
 - Target: mruby 4.0.0 (`831da26b9`)
 - Scope: all `*.rb` files under `test/` and `mrbgems/`
 - Files: 153
 
 | Result | Count |
 | --- | --- |
-| Both compilers accept the file | 152 |
-| `mrbc` accepts, `go-mrbc` rejects (gap) | 1 |
+| Both compilers accept the file | 153 |
+| `mrbc` accepts, `go-mrbc` rejects (gap) | 0 |
 | `go-mrbc` accepts, `mrbc` rejects (superset) | 0 |
 | Both reject | 0 |
-
-The single gap is `test/t/syntax.rb`, which uses the mruby-specific
-`def f(&nil)` formal parameter. go-ruby-prism does not parse that syntax.
 
 ## Runtime parity: mruby 4.0.0 tag
 
@@ -34,11 +32,11 @@ The single gap is `test/t/syntax.rb`, which uses the mruby-specific
 
 | Result | Count |
 | --- | --- |
-| Identical stdout, stderr, and exit status | 105 |
-| `go-mrbc` cannot compile | 1 |
+| Identical stdout, stderr, and exit status | 106 |
+| Different output | 0 |
 
-The compile failure is the same `&nil` file as above. Every file that both
-compilers can compile behaves identically.
+Every runnable file compiles and behaves identically to the default `mrbc`
+reference.
 
 ## Reference: development tree
 
@@ -69,24 +67,29 @@ compilers for different reasons, so they are not counted as gaps.
 
 | Result | Count |
 | --- | --- |
-| Identical stdout, stderr, and exit status | 155 |
-| Both compilers reject | 3 |
-| Different output | 2 |
+| Identical stdout, stderr, and exit status | 147 |
+| Different output | 9 |
+| Reference cannot compile | 1 |
+| Both compilers cannot compile | 2 |
+| One-sided timeout | 1 |
 
-Four of the 155 identical files time out at the same point under both
-compilers; they are compared by their partial output. The two differences are
-cases where `go-mrbc` follows Ruby semantics more closely than
-`mrbc --no-optimize`:
+Three of the 147 identical files time out at the same point under both
+compilers; they are compared by their partial output. The one-sided timeout is
+`mruby-set`, which exercises reentrant GC behavior.
 
-- `Integer#+` and friends redefined on `Integer` itself: operators are `SEND`
-  in `go-mrbc`, so the redefinition is reached. `mrbc` emits `OP_ADD` and the
-  VM does not dispatch.
-- `next` inside a `rescue` inside a `while` loop in a block: `go-mrbc`
-  continues the loop, while the reference binary returns from the block.
+All 9 output differences are cases where the reference binary fails assertions
+that `go-mrbc` passes. They come from optimized opcodes in default `mrbc` and
+from tests that redefine core operators or inspect optimized behavior:
 
-The mruby test suite expects the behavior `go-mrbc` produces in both cases.
+- `Integer#+`, `Float#+`, and similar operators redefined: `go-mrbc` uses
+  `SEND`, so the redefinition is reached; optimized opcodes may bypass it.
+- `next` inside a `rescue` inside a `while` in a block: `go-mrbc` continues
+  the loop, while the reference binary returns from the block.
+- A few tests that assert optimized-opcode or introspection behavior.
+
+The mruby test suite expects the behavior `go-mrbc` produces in these cases.
 Reproducing the reference output would mean deliberately reproducing a
-limitation, so these are kept as documented differences.
+limitation of optimized opcodes, so these are documented rather than chased.
 
 ## Reproducing
 
@@ -94,15 +97,16 @@ From the repository root, with the mruby 4.0.0 worktree at `$MRUBY_400`:
 
 ```sh
 export RBENV_VERSION=mruby-4.0.0
-go run ./cmd/compat "$MRUBY_400/test" "$MRUBY_400/mrbgems"
-go run ./cmd/runtimecompat -assert "$MRUBY_400/test/assert.rb" \
+go run ./cmd/compat -fail "$MRUBY_400/test" "$MRUBY_400/mrbgems"
+go run ./cmd/runtimecompat -fail -assert "$MRUBY_400/test/assert.rb" \
   "$MRUBY_400/test/t" "$MRUBY_400/mrbgems"
 ```
 
 For the development tree, use `mruby/test` and `mruby/mrbgems` instead.
 
 Use `-v` for per-file results, or `-json report.json` to write a machine-readable
-report.
+report. `-fail` makes the harness exit non-zero when a gap or runtime
+difference is found.
 
 ## Notes
 
@@ -115,3 +119,9 @@ report.
   build. For example, regular expression literals compile, but executing them
   requires an mruby build with `mruby-regexp`; big integer literals require
   `mruby-bigint`.
+- The error-compatibility test compares exit status and the presence of a
+  located diagnostic, not the exact wording: Prism and mruby's parser produce
+  different messages.
+- `TestRandomizedDifferential` generates programs within the supported subset
+  and compares both compiled binaries at runtime, using a fixed seed by
+  default.

@@ -27,11 +27,38 @@ func Lower(ctx context.Context, src []byte, filename string) (*Program, error) {
 
 // LowerWithParser parses src using an existing parser.
 func LowerWithParser(ctx context.Context, p *parser.Parser, src []byte, filename string) (*Program, error) {
-	result, err := p.Parse(ctx, src)
-	if err != nil {
-		return nil, fmt.Errorf("parse: %w", err)
+	source := NewSource(filename, append([]byte(nil), src...))
+	var result *parser.ParseResult
+	for {
+		parsed, err := p.Parse(ctx, source.text)
+		if err != nil {
+			return nil, fmt.Errorf("parse: %w", err)
+		}
+		result = parsed
+		if len(result.Errors) == 0 {
+			break
+		}
+		// mruby allows `&nil` in a parameter list to reject blocks. Prism
+		// implements CRuby syntax and reports an error at the `nil` token.
+		// Rewrite that exact four-byte sequence to a same-length sentinel so
+		// positions do not move, then parse again.
+		rewritten := false
+		for _, parseErr := range result.Errors {
+			offset := parseErr.Location.StartOffset
+			if offset < 1 || offset+3 > len(source.text) {
+				continue
+			}
+			if source.text[offset-1] != '&' || string(source.text[offset:offset+3]) != "nil" {
+				continue
+			}
+			copy(source.text[offset-1:offset+3], "&_n_")
+			source.markNoBlockParam(offset)
+			rewritten = true
+		}
+		if !rewritten {
+			break
+		}
 	}
-	source := NewSource(filename, src)
 	if len(result.Errors) > 0 {
 		first := result.Errors[0]
 		pos := source.Position(first.Location.StartOffset)
@@ -485,28 +512,9 @@ func (l *lowerer) lowerExpr(node parser.Node) (Expr, error) {
 		return &ArrayLiteral{exprBase: base(pos), Elements: elements}, nil
 
 	case *parser.HashNode:
-		pairs := make([]HashPair, 0, len(n.Elements))
-		for _, element := range n.Elements {
-			switch entry := element.(type) {
-			case *parser.AssocNode:
-				key, err := l.lowerExpr(entry.Key)
-				if err != nil {
-					return nil, err
-				}
-				value, err := l.lowerExpr(entry.Value)
-				if err != nil {
-					return nil, err
-				}
-				pairs = append(pairs, HashPair{Key: key, Value: value})
-			case *parser.AssocSplatNode:
-				value, err := l.lowerExpr(entry.Value)
-				if err != nil {
-					return nil, err
-				}
-				pairs = append(pairs, HashPair{Value: value})
-			default:
-				return nil, l.unsupported(element)
-			}
+		pairs, err := l.lowerHashElements(n.Elements)
+		if err != nil {
+			return nil, err
 		}
 		return &HashLiteral{exprBase: base(pos), Pairs: pairs}, nil
 
@@ -1464,6 +1472,10 @@ func (l *lowerer) lowerParameters(params *parser.ParametersNode) ([]Param, error
 		}
 	}
 	if params.Block != nil {
+		if params.Block.NameLoc != nil && l.source.isNoBlockParam(params.Block.NameLoc.StartOffset) {
+			out = append(out, Param{Pos: l.pos(params.Block), Kind: ParamNoBlock})
+			return out, nil
+		}
 		name := ""
 		if params.Block.Name != nil {
 			name = *params.Block.Name
@@ -1471,25 +1483,6 @@ func (l *lowerer) lowerParameters(params *parser.ParametersNode) ([]Param, error
 		out = append(out, Param{Pos: l.pos(params.Block), Name: name, Kind: ParamBlock})
 	}
 	return out, nil
-}
-
-func (l *lowerer) keywordHashPositional(node *parser.KeywordHashNode) bool {
-	for _, element := range node.Elements {
-		switch assoc := element.(type) {
-		case *parser.AssocSplatNode:
-			continue
-		case *parser.AssocNode:
-			if assoc.OperatorLoc != nil {
-				return true
-			}
-			if _, ok := assoc.Key.(*parser.SymbolNode); !ok {
-				return true
-			}
-		default:
-			return false
-		}
-	}
-	return false
 }
 
 func softConstantRead(read Expr, pos Position) Expr {
@@ -1588,6 +1581,33 @@ func (l *lowerer) lowerCall(n *parser.CallNode) (Expr, error) {
 	}, nil
 }
 
+func (l *lowerer) lowerHashElements(elements []parser.Node) ([]HashPair, error) {
+	pairs := make([]HashPair, 0, len(elements))
+	for _, element := range elements {
+		switch entry := element.(type) {
+		case *parser.AssocNode:
+			key, err := l.lowerExpr(entry.Key)
+			if err != nil {
+				return nil, err
+			}
+			value, err := l.lowerExpr(entry.Value)
+			if err != nil {
+				return nil, err
+			}
+			pairs = append(pairs, HashPair{Key: key, Value: value})
+		case *parser.AssocSplatNode:
+			value, err := l.lowerExpr(entry.Value)
+			if err != nil {
+				return nil, err
+			}
+			pairs = append(pairs, HashPair{Value: value})
+		default:
+			return nil, l.unsupported(element)
+		}
+	}
+	return pairs, nil
+}
+
 func (l *lowerer) lowerCallParts(args *parser.ArgumentsNode) ([]Expr, []KeywordArg, Expr, bool, error) {
 	if args == nil {
 		return nil, nil, nil, false, nil
@@ -1605,58 +1625,40 @@ func (l *lowerer) lowerCallParts(args *parser.ArgumentsNode) ([]Expr, []KeywordA
 			}
 			positional = append(positional, &SplatArg{exprBase: base(l.pos(node)), Value: value})
 		case *parser.KeywordHashNode:
-			if l.keywordHashPositional(arg) {
-				var pairs []HashPair
-				for _, element := range arg.Elements {
-					switch assoc := element.(type) {
-					case *parser.AssocSplatNode:
-						value, err := l.lowerExpr(assoc.Value)
-						if err != nil {
-							return nil, nil, nil, false, err
-						}
-						pairs = append(pairs, HashPair{Value: value})
-					case *parser.AssocNode:
-						key, err := l.lowerExpr(assoc.Key)
-						if err != nil {
-							return nil, nil, nil, false, err
-						}
-						value, err := l.lowerExpr(assoc.Value)
-						if err != nil {
-							return nil, nil, nil, false, err
-						}
-						pairs = append(pairs, HashPair{Key: key, Value: value})
-					default:
-						return nil, nil, nil, false, l.unsupported(element)
-					}
-				}
-				positional = append(positional, &HashLiteral{exprBase: base(l.pos(arg)), Pairs: pairs})
-				continue
-			}
+			symbolOnly := true
 			for _, element := range arg.Elements {
-				switch entry := element.(type) {
-				case *parser.AssocNode:
-					symbol, ok := entry.Key.(*parser.SymbolNode)
-					if !ok {
-						return nil, nil, nil, false, l.errorf(entry.Key, "only symbol keyword arguments are supported")
-					}
-					value, err := l.lowerExpr(entry.Value)
+				assoc, ok := element.(*parser.AssocNode)
+				if !ok || assoc.OperatorLoc != nil {
+					symbolOnly = false
+					break
+				}
+				if _, ok := assoc.Key.(*parser.SymbolNode); !ok {
+					symbolOnly = false
+					break
+				}
+			}
+			if symbolOnly {
+				for _, element := range arg.Elements {
+					assoc := element.(*parser.AssocNode)
+					symbol := assoc.Key.(*parser.SymbolNode)
+					value, err := l.lowerExpr(assoc.Value)
 					if err != nil {
 						return nil, nil, nil, false, err
 					}
 					keywords = append(keywords, KeywordArg{
-						Key:   &SymbolLiteral{exprBase: base(l.pos(entry.Key)), Value: symbol.Unescaped.Value},
+						Key:   &SymbolLiteral{exprBase: base(l.pos(assoc.Key)), Value: symbol.Unescaped.Value},
 						Value: value,
 					})
-				case *parser.AssocSplatNode:
-					value, err := l.lowerExpr(entry.Value)
-					if err != nil {
-						return nil, nil, nil, false, err
-					}
-					keywords = append(keywords, KeywordArg{Value: value})
-				default:
-					return nil, nil, nil, false, l.unsupported(element)
 				}
+				continue
 			}
+			pairs, err := l.lowerHashElements(arg.Elements)
+			if err != nil {
+				return nil, nil, nil, false, err
+			}
+			keywords = append(keywords, KeywordArg{
+				Value: &HashLiteral{exprBase: base(l.pos(arg)), Pairs: pairs},
+			})
 		case *parser.BlockArgumentNode:
 			if arg.Expression == nil {
 				blockArg = &BlockSlotExpr{exprBase: base(l.pos(arg))}
@@ -2113,31 +2115,9 @@ func (l *lowerer) lowerArguments(args *parser.ArgumentsNode) ([]Expr, error) {
 			out = append(out, &SplatArg{exprBase: base(l.pos(n)), Value: value})
 			continue
 		case *parser.KeywordHashNode:
-			if !l.keywordHashPositional(n) {
-				return nil, l.errorf(node, "keyword arguments are not supported here")
-			}
-			var pairs []HashPair
-			for _, element := range n.Elements {
-				switch assoc := element.(type) {
-				case *parser.AssocSplatNode:
-					value, err := l.lowerExpr(assoc.Value)
-					if err != nil {
-						return nil, err
-					}
-					pairs = append(pairs, HashPair{Value: value})
-				case *parser.AssocNode:
-					key, err := l.lowerExpr(assoc.Key)
-					if err != nil {
-						return nil, err
-					}
-					value, err := l.lowerExpr(assoc.Value)
-					if err != nil {
-						return nil, err
-					}
-					pairs = append(pairs, HashPair{Key: key, Value: value})
-				default:
-					return nil, l.unsupported(element)
-				}
+			pairs, err := l.lowerHashElements(n.Elements)
+			if err != nil {
+				return nil, err
 			}
 			out = append(out, &HashLiteral{exprBase: base(l.pos(n)), Pairs: pairs})
 			continue

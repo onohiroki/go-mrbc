@@ -34,6 +34,7 @@ English summary.
 - [x] M5 compile-parity harness over mruby's test tree
 - [x] M6 runtime-parity harness over mruby's test tree
 - [x] M7 remaining pattern and control-flow syntax
+- [x] M8 error compatibility, randomized differential tests, and 4.0.0 CI
 - [ ] Optimized opcodes
 
 ## M0 - Parser integration
@@ -118,10 +119,9 @@ conformance suite, including cases for modern syntax and destructuring.
   match, comparing partial output.
 - Fix the compiler defects surfaced by the run.
 
-Status: `cmd/runtimecompat` is implemented. The 2026-11-19 snapshot covers 160
-runnable files: 155 agree (including 4 that time out at the same point), 3 are
-rejected by both compilers, and 2 differ in cases where `go-mrbc` follows Ruby
-semantics more closely than `mrbc --no-optimize`.
+Status: `cmd/runtimecompat` is implemented. The snapshot of the development
+tree covers 160 runnable files and is tracked in the compatibility report; the
+primary 4.0.0 measurement is exact.
 
 The run also surfaced and fixed several compiler defects:
 
@@ -148,15 +148,31 @@ See [compatibility-report.md](compatibility-report.md) for the full snapshot.
 - Rightward pattern matching (`value => pattern`) and the `in` predicate form.
 - Parsing and compiling regexp and interpolated-string patterns.
 
-Status: implemented. Against the mruby 4.0.0 tag, 152 of 153 files compile (the
-remaining file uses the mruby-specific `&nil` formal parameter, which Prism
-cannot parse), and 105 of 106 runnable files behave identically.
+Status: implemented. Against the mruby 4.0.0 tag with default `mrbc` as the
+reference, **153 of 153 files compile and 106 of 106 runnable files behave
+identically**.
 
 A for-loop scope bug surfaced by the development tree was also fixed: a block
 nested in a `for` body can now capture both its own parameters and the for
-body's locals.
+body's locals. The runtime oracle switched from `mrbc --no-optimize` to the
+default `mrbc`, which surfaced and fixed keyword-hash classification, `redo`
+unwinding through `ensure`, argument forwarding with leading arguments, and
+`super` in top-level blocks.
 
 See [compatibility-report.md](compatibility-report.md) for the full snapshot.
+
+## M8 - Verification hardening
+
+- Compare CLI exit status and diagnostic shape for invalid programs.
+- Add a seeded randomized differential test that generates programs within
+  the supported subset and compares both binaries at runtime.
+- Pin mruby to the 4.0.0 tag in CI and make both parity harnesses strict
+  (`-fail`).
+
+Status: implemented. `TestErrorCompatibility` checks exit status and located
+diagnostics (not exact wording). `TestRandomizedDifferential` runs 50 seeded
+programs by default. `.github/workflows/ci.yml` builds mruby 4.0.0 and runs
+`go vet`, `go test`, `cmd/compat -fail`, and `cmd/runtimecompat -fail`.
 
 ## Parallel project: pure-Go mruby VM
 

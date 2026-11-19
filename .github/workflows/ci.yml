@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+
+      - name: Build mruby 4.0.0
+        run: |
+          git clone --depth 1 --branch 4.0.0 https://github.com/mruby/mruby.git mruby
+          cd mruby
+          rake
+
+      - name: Add mruby to PATH
+        run: echo "$GITHUB_WORKSPACE/mruby/build/host/bin" >> "$GITHUB_PATH"
+
+      - name: Vet and test
+        run: |
+          go vet ./...
+          go test ./...
+
+      - name: Compile parity against mruby 4.0.0
+        run: go run ./cmd/compat -fail mruby/test mruby/mrbgems
+
+      - name: Runtime parity against mruby 4.0.0
+        run: go run ./cmd/runtimecompat -fail -assert mruby/test/assert.rb mruby/test/t mruby/mrbgems

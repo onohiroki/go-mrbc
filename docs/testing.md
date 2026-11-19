@@ -41,7 +41,7 @@ testdata/conformance/basic_puts/
     args.txt       # optional, one argument per line
 ```
 
-Tests compile `main.rb` with `mrbc --no-optimize` and with `gomrbc`, execute
+Tests compile `main.rb` with the default `mrbc` and with `gomrbc`, execute
 both `.mrb` files with mruby, and compare the results against the expected
 files.
 
@@ -55,10 +55,11 @@ reports files that `mrbc` accepts but `go-mrbc` rejects, grouped by reason.
 
 ```sh
 export RBENV_VERSION=mruby-4.0.0
-go run ./cmd/compat mruby/test mruby/mrbgems
+go run ./cmd/compat -fail mruby/test mruby/mrbgems
 ```
 
-The current snapshot is recorded in
+`-fail` makes the command exit non-zero when a compile gap is found. The
+current snapshot is recorded in
 [compatibility-report.md](compatibility-report.md). The check is compile-only;
 runtime behavior is covered by the conformance suite and the runtime harness
 below.
@@ -73,11 +74,12 @@ same point, that counts as a match.
 
 ```sh
 export RBENV_VERSION=mruby-4.0.0
-go run ./cmd/runtimecompat mruby/test/t mruby/mrbgems
+go run ./cmd/runtimecompat -fail mruby/test/t mruby/mrbgems
 ```
 
 Use `-v` for per-file results and `-json report.json` for a machine-readable
-report. The wrapper supplies `t_print` and appends a deterministic summary
+report. `-fail` makes the command exit non-zero on compile or runtime
+mismatches. The wrapper supplies `t_print` and appends a deterministic summary
 line, so the test files can run under a plain `mruby` binary instead of
 `mrbtest`.
 
@@ -85,8 +87,8 @@ For the primary 4.0.0 measurement, point both harnesses at a 4.0.0 worktree:
 
 ```sh
 git -C mruby worktree add /tmp/mruby-4.0.0 4.0.0
-go run ./cmd/compat /tmp/mruby-4.0.0/test /tmp/mruby-4.0.0/mrbgems
-go run ./cmd/runtimecompat -assert /tmp/mruby-4.0.0/test/assert.rb \
+go run ./cmd/compat -fail /tmp/mruby-4.0.0/test /tmp/mruby-4.0.0/mrbgems
+go run ./cmd/runtimecompat -fail -assert /tmp/mruby-4.0.0/test/assert.rb \
   /tmp/mruby-4.0.0/test/t /tmp/mruby-4.0.0/mrbgems
 ```
 
@@ -108,6 +110,38 @@ Invalid or unsupported programs are covered by unit tests in
 containing the source location and reason, and that no output file is written
 (the compile API returns an error before serialization).
 
+`TestErrorCompatibility` additionally compares the CLI against `mrbc` for a
+corpus of invalid programs. It builds `gomrbc`, runs both compilers with `-c`,
+and checks that:
+
+- both reject the program;
+- both use the same exit status;
+- both emit a non-empty diagnostic;
+- the `gomrbc` diagnostic names the source file and includes a
+  `line:column` location.
+
+The exact wording is not compared, because Prism and mruby's parser produce
+different messages.
+
+## Randomized differential testing
+
+`TestRandomizedDifferential` generates small programs within the supported
+subset, compiles them with both compilers, runs both binaries on mruby, and
+compares stdout, stderr, and exit status. The default is 50 programs with a
+fixed seed; `testing.Short()` reduces that to 10.
+
+The generator covers integer expressions, string interpolation, arrays,
+hashes, blocks, methods with keyword and splat parameters, and pattern
+matching. It deliberately avoids division and unbounded loops so that every
+generated program terminates.
+
+Environment variables:
+
+- `GOMRBC_FUZZ_ITERATIONS`: number of programs
+- `GOMRBC_FUZZ_SEED`: random seed
+
+On mismatch the test prints the seed, the generated source, and both results.
+
 ## Debug information tests
 
 `mrbc/compile_test.go` compiles a failing program with `Options{DebugInfo: true}`
@@ -117,16 +151,21 @@ local variable names.
 
 ## Fuzzing
 
-Once the core compiler is stable, a small generator will produce random
-programs within the supported subset. Each generated program is compiled by
-both compilers and diffed at runtime. The generator is deliberately restricted
-to constructs that have a defined expected behavior; it is not a Ruby fuzzer.
+`TestRandomizedDifferential` provides the randomized differential corpus
+described above. For longer runs, increase `GOMRBC_FUZZ_ITERATIONS` or vary
+`GOMRBC_FUZZ_SEED`. The generator is deliberately restricted to constructs
+with defined behavior; it is not a general Ruby fuzzer.
 
 ## Continuous integration
 
-CI must:
+`.github/workflows/ci.yml` pins mruby to the **4.0.0 tag**:
 
-- build the project with a supported Go version;
-- install or build mruby 4.0.0;
-- run unit tests and the full conformance suite;
-- fail if any unsupported syntax is silently accepted.
+- checks out the repository and sets up Go;
+- clones and builds mruby 4.0.0 with `rake`;
+- runs `go vet ./...` and `go test ./...`;
+- runs `cmd/compat -fail` and `cmd/runtimecompat -fail` against the 4.0.0
+  test tree.
+
+The two harnesses exit non-zero on any compile gap or runtime mismatch. The
+4.0.0 snapshot currently has 153/153 compile matches and 106/106 runtime
+matches, so the job is strict rather than advisory.

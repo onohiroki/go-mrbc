@@ -190,6 +190,7 @@ const (
 	ParamOptionalKeyword
 	ParamKeywordRest
 	ParamDestructure
+	ParamNoBlock
 )
 
 type Param struct {

@@ -14,9 +14,10 @@ type Position struct {
 
 // Source maps byte offsets to line and column numbers.
 type Source struct {
-	File   string
-	text   []byte
-	starts []int
+	File          string
+	text          []byte
+	starts        []int
+	noBlockParams map[int]bool
 }
 
 // NewSource records the line starts of text.
@@ -27,7 +28,20 @@ func NewSource(file string, text []byte) *Source {
 			starts = append(starts, i+1)
 		}
 	}
-	return &Source{File: file, text: text, starts: starts}
+	return &Source{
+		File:          file,
+		text:          text,
+		starts:        starts,
+		noBlockParams: make(map[int]bool),
+	}
+}
+
+func (s *Source) markNoBlockParam(offset int) {
+	s.noBlockParams[offset] = true
+}
+
+func (s *Source) isNoBlockParam(offset int) bool {
+	return s.noBlockParams[offset]
 }
 
 // Position converts a byte offset into a Position.

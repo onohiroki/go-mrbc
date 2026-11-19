@@ -5,7 +5,7 @@
 - Bytecode format: **RITE 04.00**
 - VM: **mruby 4.0.0**
 - Parser: Prism (Ruby 3.3/3.4 syntax) through go-ruby-prism
-- Reference compiler: `mrbc` from mruby 4.0.0
+- Reference compiler: default `mrbc` from mruby 4.0.0
 
 The acceptance criterion is **behavioral compatibility**: a program compiled by
 `go-mrbc` must produce the same observable behavior as the same program
@@ -13,9 +13,11 @@ compiled by `mrbc` when both run on mruby 4.0.0. Output, raised errors, and
 exit status are compared.
 
 Byte-for-byte identical `.mrb` output is explicitly not a goal. `go-mrbc` does
-not initially run a peephole optimizer and compiles many operators as ordinary
-method calls, so its bytecode is larger than `mrbc`'s. This does not affect
-behavior.
+not run a peephole optimizer and compiles many operators as ordinary method
+calls, so its bytecode is larger than `mrbc`'s. Default `mrbc` emits optimized
+opcodes. In the rare case where a core operator such as `Integer#+` is
+redefined, the `SEND` form used by `go-mrbc` reaches the redefinition while the
+optimized opcode may not. Such differences are documented as intentional.
 
 ## Supported today
 
@@ -43,7 +45,9 @@ milestones. Features are enabled as their compiler support lands.
 | `&&`, `||`, `!` | Supported |
 | Method calls, positional arguments, safe navigation (`&.`) | Supported |
 | Calls with more than 14 positional arguments | Supported (packed array) |
+| Braceless hashes in argument lists | Supported (keyword hash semantics) |
 | `def` with required, optional, post, rest, and keyword parameters | Supported |
+| mruby `&nil` formal parameter (rejects blocks) | Supported |
 | Destructured parameters (`def f((a, b))`) | Supported |
 | Keyword arguments, splats, and their combinations | Supported |
 | Argument forwarding (`...`) and anonymous block forwarding (`&`) | Supported |
@@ -51,6 +55,7 @@ milestones. Features are enabled as their compiler support lands.
 | Splat arguments and block arguments (`&blk`) | Supported |
 | Blocks and `yield` (including splatted and keyword arguments) | Supported |
 | `break` / `next` (loops, blocks, lambdas) | Supported |
+| `redo` in loops, blocks, and rescue clauses | Supported |
 | `return` with a single value or multiple values | Supported |
 | `raise` | Supported |
 | Rightward pattern matching (`value => pattern`) | Supported |
@@ -80,6 +85,8 @@ The current subset is intentionally conservative:
 
 - `yield` is supported in a method body and in blocks nested inside that
   method. Yielding from class bodies or lambdas is rejected.
+- `super` is supported in methods and blocks, including top-level blocks
+  (where it raises at runtime), but not inside a lambda defined in a method.
 - The `it` implicit block parameter is rejected; numbered parameters (`_1`)
   are supported. mruby 4.0's own compiler lowers `it` to a method call that is
   undefined at runtime, so accepting it would not make the program work.
@@ -89,8 +96,6 @@ The current subset is intentionally conservative:
   not accept it either.
 - Dynamic constant names (`A.const_set(name, x)`) are rejected; constant paths
   must be literal when they are assignment targets.
-- `&nil` in a formal parameter list (`def f(&nil)`) is a mruby-specific
-  extension that go-ruby-prism does not parse.
 - Regular expression literals compile, but executing them requires an mruby
   build with the `mruby-regexp` mrbgem.
 - Big integer literals compile, but running them requires an mruby build with
@@ -112,36 +117,35 @@ Current explicit rejections include:
 - `eval`, `load`, and `require` (host responsibilities)
 - encoding and magic comments
 - fibers, threads, refinements, and `TracePoint`
-- the mruby-specific `&nil` formal parameter, which Prism cannot parse
+- `super` inside a lambda defined in a method
 
 ## Runtime parity
 
-`cmd/runtimecompat` runs mruby's own test files through both compilers. The
-primary measurement uses the **mruby 4.0.0 tag**. The 2026-11-19 snapshot
-covers 106 runnable files:
+`cmd/runtimecompat` runs mruby's own test files through both compilers, using
+the default `mrbc` as the reference. The primary measurement uses the **mruby
+4.0.0 tag**. The 2026-11-20 snapshot covers 106 runnable files:
 
 | Result | Count |
 | --- | --- |
-| Identical stdout/stderr/exit status | 105 |
-| `go-mrbc` cannot compile | 1 |
-
-The single compile failure is `test/t/syntax.rb`, which uses the
-mruby-specific `def f(&nil)` parameter form. go-ruby-prism does not parse it.
+| Identical stdout/stderr/exit status | 106 |
 
 For reference, the same check against the local mruby development tree
-(`4.0.0-3011-gdbab56510`, 160 runnable files) reports 155 matches (including 4
-that time out at the same point), 3 files rejected by both compilers, and 2
-intentional differences:
+(`4.0.0-3011-gdbab56510`, 160 runnable files) reports 147 matches (including 3
+that time out at the same point), 9 output differences, 1 file the reference
+cannot compile, 2 files neither compiler can compile, and 1 one-sided timeout.
 
-- **Integer arithmetic redefinition.** `go-mrbc` compiles operators as `SEND`,
-  so a redefined `Integer#+` is observed. `mrbc --no-optimize` emits `OP_ADD`
-  and the VM does not reach the redefinition.
-- **`next` inside `rescue` inside a `while` in a block.** `go-mrbc` continues
-  the loop; the reference binary returns from the block instead.
+All 9 output differences are cases where the reference binary fails assertions
+that `go-mrbc` passes. They come from optimized opcodes in default `mrbc` and
+from tests that redefine core operators or inspect optimized behavior. The
+mruby test suite itself expects the behavior `go-mrbc` produces. Examples:
 
-Both cases are ones where the mruby test suite itself expects the behavior
-`go-mrbc` produces. They are kept as deliberate differences rather than
-reproducing the reference compiler's output.
+- `Integer#+` and `Float#+` redefined: `go-mrbc` uses `SEND`, so the
+  redefinition is reached; optimized `OP_ADD` may bypass it.
+- `next` inside `rescue` inside a `while` in a block: `go-mrbc` continues the
+  loop; the reference binary returns from the block instead.
+
+The development-tree results are tracked separately because those tests
+include syntax added after the 4.0.0 release.
 
 ## Semantic notes
 
@@ -165,6 +169,14 @@ Writes through a constant path (`A::X = v`, `A::X += v`, `A::X ||= v`) are
 supported when the path is built from literal constants. mruby's `mrbc`
 rejects ordinary constant reassignment at compile time; `go-mrbc` does not
 enforce that policy, so this is a deliberate superset.
+
+### mruby `&nil`
+
+`def f(&nil)` is mruby-specific syntax that Prism does not accept. The
+compiler rewrites the four-byte `&nil` sequence to a same-length sentinel
+before parsing and marks the parameter as a no-block parameter. The generated
+`ENTER` sets mruby's `noblock` aspec bit, so the VM raises `ArgumentError` when
+a block is passed, matching mruby.
 
 ### Exceptions
 

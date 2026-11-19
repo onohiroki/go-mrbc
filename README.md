@@ -19,14 +19,14 @@ inheritance, `super`, instance/class variables, constants, keyword arguments,
 splats, lambdas, multiple assignment, exceptions, pattern matching, debug
 information, and `raise`.
 
-Against the **mruby 4.0.0 tag**, 152 of 153 files compile (the remaining file
-uses the mruby-specific `&nil` formal parameter, which Prism cannot parse), and
-105 of 106 runnable files behave identically. Against the local development
-tree (3,011 commits after 4.0.0), 234 of 237 files compile and 155 of 160
-runnable files agree (including 4 that time out at the same point); the two
-remaining runtime differences are cases where `go-mrbc` follows Ruby semantics
-more closely than `mrbc --no-optimize`. See
-[Compatibility report](docs/compatibility-report.md).
+Against the **mruby 4.0.0 tag** with the **default `mrbc`** as the reference,
+**153 of 153 files compile and 106 of 106 runnable files behave identically**.
+Against the local development tree (3,011 commits after 4.0.0), 234 of 237
+files compile and 147 of 160 runnable files agree; the remaining output
+differences are cases where default `mrbc`'s optimized opcodes cause the
+reference binary to fail assertions that `go-mrbc` passes. See
+[Compatibility report](docs/compatibility-report.md). CI builds mruby 4.0.0
+from the tag and runs both parity harnesses with `-fail`.
 
 | Component | Status |
 | --- | --- |
@@ -43,6 +43,7 @@ more closely than `mrbc --no-optimize`. See
 | `alias` / `undef` | Implemented |
 | Pattern matching (array rest, find, alternation, hash) | Implemented |
 | Debug information (`-g`, LVAR/DBG) | Implemented |
+| Error compatibility and randomized differential tests | Implemented |
 | Regex literals (runtime gem required) | Compiled |
 | Peephole optimizer | Not planned initially |
 

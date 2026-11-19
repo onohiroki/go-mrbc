@@ -442,6 +442,9 @@ func paramNames(params []Param) []string {
 			suffix = ":"
 		case ParamKeywordRest:
 			prefix = "**"
+		case ParamNoBlock:
+			names[i] = "&nil"
+			continue
 		}
 		names[i] = prefix + param.Name + suffix
 	}
