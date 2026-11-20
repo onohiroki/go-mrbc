@@ -7,8 +7,9 @@ and produces **RITE 04.00** bytecode that runs on the official **mruby 4.0.0**
 virtual machine. Everything except the parser is implemented in pure Go.
 
 The long-term goal is to use mruby as an embedded macro language for tools
-written in Go. A pure-Go mruby VM is being developed as a separate, parallel
-project and is not part of this repository.
+written in Go. The pure-Go mruby VM is developed separately as
+[`go-mrbvm`](https://github.com/onohiroki/go-mrbvm); see the
+[go-mrbvm plan](docs/go-mrbvm-plan.md).
 
 ## Status
 
@@ -177,6 +178,8 @@ See [docs/architecture.md](docs/architecture.md) for details.
 - [Compatibility report](docs/compatibility-report.md)
 - [Testing](docs/testing.md)
 - [Roadmap](docs/roadmap.md)
+- [go-mrbvm plan](docs/go-mrbvm-plan.md)
+- [go-mrbvm plan (Japanese)](docs/go-mrbvm-plan.ja.md)
 - [Implementation plan (Japanese)](docs/implementation-plan.ja.md)
 
 ## Development

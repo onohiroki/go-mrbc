@@ -176,9 +176,13 @@ diagnostics (not exact wording). `TestRandomizedDifferential` runs 50 seeded
 programs by default. `.github/workflows/ci.yml` builds mruby 4.0.0 and runs
 `go vet`, `go test`, `cmd/compat -fail`, and `cmd/runtimecompat -fail`.
 
-## Parallel project: pure-Go mruby VM
+## Parallel project: go-mrbvm
 
-A pure-Go mruby VM is developed separately. It will consume the `bytecode`
-package from this module for RITE loading and instruction decoding, and reuse
-the conformance corpus. The compiler remains independent of the VM and always
-uses mruby 4.0.0 as the reference implementation.
+The pure-Go mruby VM is developed separately as
+[`go-mrbvm`](https://github.com/onohiroki/go-mrbvm). It consumes the
+`bytecode` package from this module for RITE loading and instruction decoding,
+and reuses the conformance corpus. The compiler remains independent of the VM
+and always uses mruby 4.0.0 as the reference implementation.
+
+The initial VM plan is kept here so both projects share a single contract:
+[go-mrbvm plan](go-mrbvm-plan.md).
