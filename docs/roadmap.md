@@ -35,6 +35,7 @@ English summary.
 - [x] M6 runtime-parity harness over mruby's test tree
 - [x] M7 remaining pattern and control-flow syntax
 - [x] M8 error compatibility, randomized differential tests, and 4.0.0 CI
+- [x] `super`, `yield`, and `...` forwarding inside lambdas
 - [ ] Optimized opcodes
 
 ## M0 - Parser integration
@@ -157,7 +158,8 @@ nested in a `for` body can now capture both its own parameters and the for
 body's locals. The runtime oracle switched from `mrbc --no-optimize` to the
 default `mrbc`, which surfaced and fixed keyword-hash classification, `redo`
 unwinding through `ensure`, argument forwarding with leading arguments, and
-`super` in top-level blocks.
+`super` in top-level blocks. Lambdas now inherit the enclosing method context,
+so `super`, `yield`, and `...` forwarding work inside a lambda.
 
 See [compatibility-report.md](compatibility-report.md) for the full snapshot.
 

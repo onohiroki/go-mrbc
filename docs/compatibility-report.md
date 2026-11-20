@@ -67,15 +67,13 @@ compilers for different reasons, so they are not counted as gaps.
 
 | Result | Count |
 | --- | --- |
-| Identical stdout, stderr, and exit status | 147 |
+| Identical stdout, stderr, and exit status | 148 |
 | Different output | 9 |
 | Reference cannot compile | 1 |
 | Both compilers cannot compile | 2 |
-| One-sided timeout | 1 |
 
-Three of the 147 identical files time out at the same point under both
-compilers; they are compared by their partial output. The one-sided timeout is
-`mruby-set`, which exercises reentrant GC behavior.
+Three of the 148 identical files time out at the same point under both
+compilers; they are compared by their partial output.
 
 All 9 output differences are cases where the reference binary fails assertions
 that `go-mrbc` passes. They come from optimized opcodes in default `mrbc` and

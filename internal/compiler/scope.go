@@ -103,23 +103,24 @@ func (c *Compiler) newScope(parent *scope, kind scopeKind, params []frontend.Par
 		s.method = s
 		s.yieldLevel = 0
 		s.forDepth = 0
-	case scopeBlock:
+	case scopeBlock, scopeLambda:
+		// Lambdas and blocks both see the enclosing method's yield/super
+		// context. Lambdas still differ for return/break/next, which is
+		// handled by the scope kind in the compiler.
 		switch {
 		case parent == nil:
 			s.yieldLevel = -1
 		case parent.kind == scopeMethod:
 			s.yieldLevel = 1
-		case parent.kind == scopeBlock && parent.yieldLevel >= 0:
+		case (parent.kind == scopeBlock || parent.kind == scopeLambda) && parent.yieldLevel >= 0:
 			s.yieldLevel = parent.yieldLevel + 1
 		default:
 			s.yieldLevel = -1
 		}
-	case scopeClass, scopeLambda:
+	case scopeClass:
 		s.method = nil
 		s.yieldLevel = -1
-		if kind == scopeClass {
-			s.forDepth = 0
-		}
+		s.forDepth = 0
 	}
 
 	if err := s.initLocals(locals); err != nil {

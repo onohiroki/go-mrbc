@@ -56,11 +56,12 @@ milestones. Features are enabled as their compiler support lands.
 | Blocks and `yield` (including splatted and keyword arguments) | Supported |
 | `break` / `next` (loops, blocks, lambdas) | Supported |
 | `redo` in loops, blocks, and rescue clauses | Supported |
+| Lambda capturing method `super`, `yield`, and `...` forwarding | Supported |
 | `return` with a single value or multiple values | Supported |
 | `raise` | Supported |
 | Rightward pattern matching (`value => pattern`) | Supported |
 | Pattern-matching predicate (`value in pattern`) | Supported extension |
-| Classes, modules, inheritance, `super` (including from blocks) | Supported |
+| Classes, modules, inheritance, `super` (including from blocks and lambdas) | Supported |
 | Nested classes and `A::B` class definitions | Supported |
 | Class methods, singleton methods, and `class << self` | Supported |
 | `lambda` / `proc` | Supported |
@@ -83,10 +84,11 @@ table is kept in sync with the implementation rather than the ambition.
 
 The current subset is intentionally conservative:
 
-- `yield` is supported in a method body and in blocks nested inside that
-  method. Yielding from class bodies or lambdas is rejected.
-- `super` is supported in methods and blocks, including top-level blocks
-  (where it raises at runtime), but not inside a lambda defined in a method.
+- `yield` is supported in a method body and in blocks or lambdas nested
+  inside that method. Yielding from a class body is rejected.
+- `super` is supported in methods, blocks, and lambdas that are nested inside
+  a method. A top-level block or lambda compiles to a runtime
+  `NoMethodError`, matching mruby.
 - The `it` implicit block parameter is rejected; numbered parameters (`_1`)
   are supported. mruby 4.0's own compiler lowers `it` to a method call that is
   undefined at runtime, so accepting it would not make the program work.
@@ -117,7 +119,6 @@ Current explicit rejections include:
 - `eval`, `load`, and `require` (host responsibilities)
 - encoding and magic comments
 - fibers, threads, refinements, and `TracePoint`
-- `super` inside a lambda defined in a method
 
 ## Runtime parity
 
@@ -130,9 +131,9 @@ the default `mrbc` as the reference. The primary measurement uses the **mruby
 | Identical stdout/stderr/exit status | 106 |
 
 For reference, the same check against the local mruby development tree
-(`4.0.0-3011-gdbab56510`, 160 runnable files) reports 147 matches (including 3
+(`4.0.0-3011-gdbab56510`, 160 runnable files) reports 148 matches (including 3
 that time out at the same point), 9 output differences, 1 file the reference
-cannot compile, 2 files neither compiler can compile, and 1 one-sided timeout.
+cannot compile, and 2 files neither compiler can compile.
 
 All 9 output differences are cases where the reference binary fails assertions
 that `go-mrbc` passes. They come from optimized opcodes in default `mrbc` and

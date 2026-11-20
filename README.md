@@ -22,7 +22,7 @@ information, and `raise`.
 Against the **mruby 4.0.0 tag** with the **default `mrbc`** as the reference,
 **153 of 153 files compile and 106 of 106 runnable files behave identically**.
 Against the local development tree (3,011 commits after 4.0.0), 234 of 237
-files compile and 147 of 160 runnable files agree; the remaining output
+files compile and 148 of 160 runnable files agree; the remaining output
 differences are cases where default `mrbc`'s optimized opcodes cause the
 reference binary to fail assertions that `go-mrbc` passes. See
 [Compatibility report](docs/compatibility-report.md). CI builds mruby 4.0.0
