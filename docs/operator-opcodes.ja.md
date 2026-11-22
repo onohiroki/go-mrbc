@@ -6,21 +6,23 @@
 
 ## 1. 目的
 
-`go-mrbc` は現在、`+` や `<` などの演算子をすべて `SEND` で出力している。
+`go-mrbc` は以前、`+` や `<` などの演算子をすべて `SEND` で出力していた。
 mruby 4.0.0 の公式 `mrbc` は `OP_ADD` / `OP_ADDI` / `OP_ADDILV` / `OP_LT`
 などの専用命令を出力しており、これが go-mrbvm と C mruby の性能差の
-主要因になっている。
+主要因になっていた。
 
 go-mrbvm 側は専用 opcode をすでに高速実装しているため、go-mrbc が公式と
-同じ opcode を出せば、そのまま性能差が縮まる。この文書は、新しい
-セッションで実装を進めるための仕様・手順・検証方法をまとめたものである。
+同じ opcode を出せば、そのまま性能差が縮まる。この文書は、その
+仕様・手順・検証方法と実装結果をまとめたものである。Phase 1〜5 は
+実装済み（§8 参照）。
 
-### ゴール
+### ゴール（すべて達成）
 
 - `x + 1` が `OP_ADDI`
 - `x + y` が `OP_ADD`
 - `x += 1` が `OP_ADDILV`
 - `x < y` が `OP_LT`
+- `a[i]` / `a[i] = v` が `OP_GETIDX` / `OP_SETIDX`
 - 公式 `mrbc` と go-mrbc の命令数がほぼ一致する
 
 ### 期待効果（go-mrbvm での実測、2026-11-22）
@@ -156,6 +158,8 @@ OPCODE(GE,     B)
 ---
 
 ## 4. 実装計画
+
+以下は実装時の計画である。Phase 1〜5 は実装済みで、結果は §8 にまとめた。
 
 ### 対象ファイル
 
@@ -447,22 +451,55 @@ go build -o bin/mrbtest ./cmd/mrbtest
 新しいセッションでは、まずこのファイルと
 [implementation-plan.ja.md](implementation-plan.ja.md) の §6.3 / §8 を読む。
 
-- [ ] Phase 1: 演算子 → `OP_ADD` / `OP_SUB` / `OP_MUL` / `OP_DIV` /
+- [x] Phase 1: 演算子 → `OP_ADD` / `OP_SUB` / `OP_MUL` / `OP_DIV` /
       `OP_EQ` / `OP_LT` / `OP_LE` / `OP_GT` / `OP_GE`
-  - [ ] `compileCallPrepared` に条件分岐を追加
-  - [ ] opcode 存在テスト
-  - [ ] `go test ./...`
-  - [ ] `vmbench` で加算ループ・mixed を計測
-- [ ] Phase 2: 即値 → `OP_ADDI` / `OP_SUBI`
-  - [ ] 0〜255 の制限を守る
-  - [ ] 負値・256 以上が SEND のままであることをテスト
-- [ ] Phase 3: `x += 1` → `OP_ADDILV` / `OP_SUBILV`
-  - [ ] クロージャ内・引数・ブロック内のテスト
-  - [ ] `obj.x += 1` が融合しないことをテスト
-- [ ] Phase 4: MOVE peephole（任意）
-  - [ ] まず AST レベルの宛先直接コンパイル
-  - [ ] 必要ならバイト列 rewind
-- [ ] Phase 5: `GETIDX` / `SETIDX` / `SEND0`（任意）
+  - [x] `compileCallPrepared` に条件分岐を追加
+  - [x] opcode 存在テスト
+  - [x] `go test ./...`
+  - [x] `vmbench` で加算ループ・mixed を計測
+- [x] Phase 2: 即値 → `OP_ADDI` / `OP_SUBI`
+  - [x] 0〜255 の制限を守る
+  - [x] 負値・256 以上が SEND のままであることをテスト
+- [x] Phase 3: `x += 1` → `OP_ADDILV` / `OP_SUBILV`
+  - [x] クロージャ内・引数・ブロック内のテスト
+  - [x] `obj.x += 1` が融合しないことをテスト
+- [x] Phase 4: MOVE peephole（任意）
+  - [x] まず AST レベルの宛先直接コンパイル
+        （単純な代入、文の結果破棄、call の dst 再利用）
+  - [x] バイト列 rewind は不要だったため未実装
+- [x] Phase 5: `GETIDX` / `SETIDX` / `SEND0`（任意）
+  - [x] `GETIDX0`（`a[0]`）、`SEND0` / `SSEND0` も実装
+  - [x] `a[i] = v` の式の値が代入値になることを修正
+
+### 実装結果（2026-11-22 実測）
+
+| 項目 | 変更前 | 変更後 | 公式 mrbc（同時計測） |
+| --- | ---: | ---: | ---: |
+| `bump` のメソッド irep | 17 命令 | 6 命令 | 6 命令 |
+| 加算ループ（200,000 回） | 2.06x | 1.1〜1.3x | 1.2x 前後 |
+| mixed.rb | 1.34x | 1.09〜1.12x | 1.10〜1.14x |
+
+`vmbench` の比率は C mruby のプロセス起動やマシン負荷で大きく振れる。
+同じ実行内で公式 mrbc のバイトコードと交互に比べると、go-mrbvm の
+実行時間は次のとおりで、公式と同等かわずかに速い。
+
+- 加算ループ 150 iterations: go-mrbc 1.046〜1.078s / 公式 mrbc 1.106〜1.189s
+- mixed.rb 20 iterations: go-mrbc 627〜643ms / 公式 mrbc 637〜663ms
+
+`fib(22)` の `irep` は公式と同じ命令列（`SUBI` + `SSEND` + `ADD`）になり、
+加算ループも 1 反復あたりの命令数は公式と一致した。残る差はトップレベル
+の `LOADNIL` / `RETURN` とレジスタ番号程度である。
+
+生成される opcode:
+
+- `+ - * / == < <= > >=` → `OP_ADD` 〜 `OP_GE`
+- `x + 1` / `x - 2`（0〜255 の整数リテラル）→ `OP_ADDI` / `OP_SUBI`
+- `x += 1` / `x -= 1`（ローカル）→ `OP_ADDILV` / `OP_SUBILV`
+- `a[i]` / `a[0]` / `a[i] = v` → `OP_GETIDX` / `OP_GETIDX0` / `OP_SETIDX`
+- 引数なし呼び出し → `OP_SEND0` / `OP_SSEND0`
+
+テストは `mrbc/operator_opcode_test.go`（opcode の存在・非融合条件・命令数）と
+`testdata/conformance/operator_opcodes/`（C mruby での実行結果一致）に追加した。
 
 ### 推奨コミット粒度
 
@@ -476,7 +513,7 @@ docs: update operator opcode status
 
 ### 完了条件
 
-- go-mrbc の加算ループが 2.11x → **1.2x 前後**
-- go-mrbc の mixed.rb が 1.33x → **1.1x 前後**
-- Phase 4 まで入れて公式 mrbc とほぼ同等（1.04〜1.1x）
-- `go test ./...`、go-mrbvm の `vmcompat` / `official manifest` がすべて成功
+- go-mrbc の加算ループが 2.11x → **1.2x 前後**（達成）
+- go-mrbc の mixed.rb が 1.33x → **1.1x 前後**（達成）
+- Phase 4 まで入れて公式 mrbc とほぼ同等（1.04〜1.1x、達成）
+- `go test ./...`、go-mrbvm の `vmcompat` / `official manifest` がすべて成功（達成）
