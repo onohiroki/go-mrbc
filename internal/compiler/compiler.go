@@ -83,6 +83,15 @@ func (c *Compiler) compileBody(s *scope, body []frontend.Expr, dst int) {
 	}
 }
 
+// compileAt compiles expr into dst with sp temporarily set so that dst is the
+// top temporary. Registers above dst are reserved by the caller but have not
+// been evaluated yet, so a nested call can reuse them and avoid a copy.
+func (c *Compiler) compileAt(s *scope, expr frontend.Expr, dst, reservedSP int) {
+	s.setSP(dst + 1)
+	c.compileExpr(s, expr, dst)
+	s.setSP(reservedSP)
+}
+
 // compileStmt compiles an expression whose value is discarded. Cases that
 // would otherwise materialize a temporary just to drop it skip that copy.
 func (c *Compiler) compileStmt(s *scope, expr frontend.Expr) {

@@ -267,6 +267,17 @@ func (s *scope) alloc(n int) int {
 	return base
 }
 
+// allocAt uses dst as the base of an n-register block when dst is the top
+// temporary. Otherwise it allocates a fresh block. Reusing the destination
+// avoids a copy out of a temporary that is about to be overwritten anyway.
+func (s *scope) allocAt(dst, n int) (int, bool) {
+	if dst == s.sp-1 && n > 0 {
+		s.setSP(dst + n)
+		return dst, true
+	}
+	return s.alloc(n), false
+}
+
 func (s *scope) setSP(reg int) {
 	s.sp = reg
 	if reg > s.maxsp {

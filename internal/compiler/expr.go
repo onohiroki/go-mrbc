@@ -103,7 +103,7 @@ func (c *Compiler) compileExpr(s *scope, expr frontend.Expr, dst int) {
 	case *frontend.HashLiteral:
 		c.compileHash(s, e, dst)
 	case *frontend.RangeLiteral:
-		base := s.alloc(2)
+		base, reused := s.allocAt(dst, 2)
 		c.compileExpr(s, e.Low, base)
 		c.compileExpr(s, e.High, base+1)
 		op := bytecode.OpRANGE_INC
@@ -111,7 +111,9 @@ func (c *Compiler) compileExpr(s *scope, expr frontend.Expr, dst int) {
 			op = bytecode.OpRANGE_EXC
 		}
 		s.emit(op, uint32(base))
-		s.emitMove(dst, base)
+		if !reused {
+			s.emitMove(dst, base)
+		}
 
 	case *frontend.InstanceRead:
 		s.emit(bytecode.OpGETIV, uint32(dst), s.sym(e.Name))
@@ -355,17 +357,17 @@ func (c *Compiler) compileArray(s *scope, e *frontend.ArrayLiteral, dst int) {
 		return
 	}
 	if len(e.Elements) == 0 {
-		base := s.alloc(1)
-		s.emit(bytecode.OpARRAY, uint32(base), 0)
-		s.emitMove(dst, base)
+		s.emit(bytecode.OpARRAY, uint32(dst), 0)
 		return
 	}
-	base := s.alloc(len(e.Elements))
+	base, reused := s.allocAt(dst, len(e.Elements))
 	for i, element := range e.Elements {
 		c.compileExpr(s, element, base+i)
 	}
 	s.emit(bytecode.OpARRAY, uint32(base), uint32(len(e.Elements)))
-	s.emitMove(dst, base)
+	if !reused {
+		s.emitMove(dst, base)
+	}
 }
 
 func (c *Compiler) compileHash(s *scope, e *frontend.HashLiteral, dst int) {
@@ -377,7 +379,7 @@ func (c *Compiler) compileHash(s *scope, e *frontend.HashLiteral, dst int) {
 		}
 	}
 	if hasSplat {
-		base := s.alloc(1)
+		base, reused := s.allocAt(dst, 1)
 		s.emit(bytecode.OpHASH, uint32(base), 0)
 		headerSP := s.sp
 		for _, pair := range e.Pairs {
@@ -393,22 +395,24 @@ func (c *Compiler) compileHash(s *scope, e *frontend.HashLiteral, dst int) {
 			s.emit(bytecode.OpHASHADD, uint32(base), 1)
 		}
 		s.sp = headerSP
-		s.emitMove(dst, base)
+		if !reused {
+			s.emitMove(dst, base)
+		}
 		return
 	}
 	if len(e.Pairs) == 0 {
-		base := s.alloc(1)
-		s.emit(bytecode.OpHASH, uint32(base), 0)
-		s.emitMove(dst, base)
+		s.emit(bytecode.OpHASH, uint32(dst), 0)
 		return
 	}
-	base := s.alloc(len(e.Pairs) * 2)
+	base, reused := s.allocAt(dst, len(e.Pairs)*2)
 	for i, pair := range e.Pairs {
 		c.compileExpr(s, pair.Key, base+i*2)
 		c.compileExpr(s, pair.Value, base+i*2+1)
 	}
 	s.emit(bytecode.OpHASH, uint32(base), uint32(len(e.Pairs)))
-	s.emitMove(dst, base)
+	if !reused {
+		s.emitMove(dst, base)
+	}
 }
 
 func (c *Compiler) compileIf(s *scope, e *frontend.IfExpr, dst int) {
@@ -417,6 +421,9 @@ func (c *Compiler) compileIf(s *scope, e *frontend.IfExpr, dst int) {
 	elseLabel := s.asm.newLabel()
 	endLabel := s.asm.newLabel()
 	s.asm.jmpIf(bytecode.OpJMPNOT, cond, elseLabel)
+	// The condition is dead after the branch. Releasing its register lets a
+	// branch use dst as the base of a call and skip a result copy.
+	s.sp = cond
 	c.compileExpr(s, e.Then, dst)
 	s.asm.jmp(endLabel)
 	s.asm.bind(elseLabel)
@@ -446,6 +453,8 @@ func (c *Compiler) compileWhile(s *scope, e *frontend.WhileExpr, dst int) {
 	} else {
 		s.asm.jmpIf(bytecode.OpJMPNOT, cond, end)
 	}
+	// The condition is dead until the next iteration.
+	s.sp = cond
 
 	info := &loopInfo{breakTarget: end, continueTarget: condStart, resultReg: dst}
 	previous := s.loop
@@ -1451,12 +1460,24 @@ func (c *Compiler) compileCallPrepared(s *scope, e *frontend.Call, dst, preRecei
 		blockRegs = 1
 	}
 
-	base := s.alloc(1 + positionalRegs + keywordRegs + blockRegs)
+	// When dst is the top temporary it can hold the receiver and the result
+	// itself, so no copy out of base is needed.
+	need := 1 + positionalRegs + keywordRegs + blockRegs
+	base := dst
+	reuseDst := wantResult && dst == s.sp-1
+	if !reuseDst {
+		base = s.alloc(need)
+	} else {
+		s.setSP(dst + need)
+	}
+	reservedSP := s.sp
 	if !e.ImplicitSelf() {
 		if preReceiver >= 0 {
 			s.emitMove(base, preReceiver)
 		} else {
-			c.compileExpr(s, e.Receiver, base)
+			// Only the receiver slot is live while the receiver is
+			// evaluated, so a nested call may use the argument slots.
+			c.compileAt(s, e.Receiver, base, reservedSP)
 		}
 	}
 	// A builtin one-argument operator can use the dedicated arithmetic
@@ -1481,7 +1502,7 @@ func (c *Compiler) compileCallPrepared(s *scope, e *frontend.Call, dst, preRecei
 				return
 			}
 		}
-		c.compileExpr(s, e.Args[0], base+1)
+		c.compileAt(s, e.Args[0], base+1, reservedSP)
 		s.emit(arith, uint32(base))
 		if wantResult {
 			s.emitMove(dst, base)
@@ -1492,7 +1513,7 @@ func (c *Compiler) compileCallPrepared(s *scope, e *frontend.Call, dst, preRecei
 		c.buildArgArray(s, e.Args, base+1)
 	} else {
 		for i, arg := range e.Args {
-			c.compileExpr(s, arg, base+1+i)
+			c.compileAt(s, arg, base+1+i, reservedSP)
 		}
 	}
 	keywordBase := base + 1 + positionalRegs

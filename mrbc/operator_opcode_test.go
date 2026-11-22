@@ -191,6 +191,49 @@ func TestLocalOpAssignInBlock(t *testing.T) {
 	}
 }
 
+func TestLocalOpAssignInstructionCount(t *testing.T) {
+	src := "def bump(n)\n  x = n\n  x += 1\n  x - 2\nend\n"
+	irep := compileIrep(t, src)
+	if len(irep.Reps) != 1 {
+		t.Fatalf("bump irep count = %d, want 1", len(irep.Reps))
+	}
+	instructions := decodeCode(t, irep.Reps[0].Code)
+	if got := countOpcode(instructions, bytecode.OpMOVE); got > 2 {
+		t.Fatalf("bump has %d MOVEs, want at most 2:\n%s", got, disassemble(t, src))
+	}
+	for _, op := range []bytecode.Opcode{
+		bytecode.OpADDILV, bytecode.OpSUBI, bytecode.OpSEND, bytecode.OpSSEND,
+	} {
+		if op == bytecode.OpADDILV || op == bytecode.OpSUBI {
+			if !hasOpcode(instructions, op) {
+				t.Fatalf("bump does not contain %s:\n%s", op, disassemble(t, src))
+			}
+			continue
+		}
+		if hasOpcode(instructions, op) {
+			t.Fatalf("bump still contains %s:\n%s", op, disassemble(t, src))
+		}
+	}
+}
+
+func TestNestedCallRegisters(t *testing.T) {
+	src := "def fib(n)\n  if n < 2\n    n\n  else\n    fib(n - 1) + fib(n - 2)\n  end\nend\n"
+	irep := compileIrep(t, src)
+	if len(irep.Reps) != 1 {
+		t.Fatalf("fib irep count = %d, want 1", len(irep.Reps))
+	}
+	instructions := decodeCode(t, irep.Reps[0].Code)
+	if got := countOpcode(instructions, bytecode.OpMOVE); got > 4 {
+		t.Fatalf("fib has %d MOVEs, want at most 4:\n%s", got, disassemble(t, src))
+	}
+	if !hasOpcode(instructions, bytecode.OpSUBI) || !hasOpcode(instructions, bytecode.OpADD) {
+		t.Fatalf("fib does not use SUBI and ADD:\n%s", disassemble(t, src))
+	}
+	if hasOpcode(instructions, bytecode.OpSEND) {
+		t.Fatalf("fib still contains a SEND:\n%s", disassemble(t, src))
+	}
+}
+
 func TestOperatorOpcodeRegisterLimit(t *testing.T) {
 	var top strings.Builder
 	var method strings.Builder
