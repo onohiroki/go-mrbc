@@ -180,6 +180,7 @@ See [docs/architecture.md](docs/architecture.md) for details.
 - [Roadmap](docs/roadmap.md)
 - [go-mrbvm plan](docs/go-mrbvm-plan.md)
 - [go-mrbvm plan (Japanese)](docs/go-mrbvm-plan.ja.md)
+- [Third-party licenses](THIRD_PARTY_LICENSES.md)
 - [Implementation plan (Japanese)](docs/implementation-plan.ja.md)
 
 ## Development
@@ -197,5 +198,19 @@ Conformance tests require mruby 4.0.0 and `mrbc` on `PATH`; see
 
 ## License
 
-MIT. See [LICENSE](LICENSE). mruby, Prism, and go-ruby-prism are distributed
-under their own MIT licenses; see [NOTICE](NOTICE).
+The original source code and documentation in this repository are licensed
+under the **MIT License**; see [LICENSE](LICENSE).
+
+The compiler binary links third-party modules:
+
+- [go-ruby-prism](https://github.com/danielgatis/go-ruby-prism) — MIT
+- [Prism](https://github.com/ruby/prism) — MIT, embedded as `prism.wasm`
+- [wazero](https://github.com/tetratelabs/wazero) — Apache-2.0
+
+See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) and
+[third_party/](third_party/) for the notices and full license texts. mruby is
+referenced as the bytecode and VM specification; no mruby C code is linked.
+
+`.mrb` files generated from user Ruby programs are not claimed by this
+project's MIT License. Their licensing is determined by the input program and
+the user's own distribution terms.
