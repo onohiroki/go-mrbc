@@ -1562,6 +1562,18 @@ func (c *Compiler) compileCallPrepared(s *scope, e *frontend.Call, dst, preRecei
 		c.compileBlockOperand(s, blockIndex, e.BlockArg, blockReg)
 	}
 
+	if !hasBlock && n == 0 && len(e.Keywords) == 0 {
+		op := bytecode.OpSEND0
+		if e.ImplicitSelf() {
+			op = bytecode.OpSSEND0
+		}
+		s.emit(op, uint32(base), s.sym(e.Name))
+		if wantResult {
+			s.emitMove(dst, base)
+		}
+		return
+	}
+
 	positionalInfo := uint32(n)
 	if packedArgs {
 		positionalInfo = 15

@@ -191,6 +191,21 @@ func TestLocalOpAssignInBlock(t *testing.T) {
 	}
 }
 
+func TestSend0Opcodes(t *testing.T) {
+	t.Run("explicit receiver", func(t *testing.T) {
+		instructions := compileInstructions(t, "x = \"a\"\nx.upcase\n")
+		if !hasOpcode(instructions, bytecode.OpSEND0) {
+			t.Fatalf("bytecode does not contain SEND0:\n%s", disassemble(t, "x = \"a\"\nx.upcase\n"))
+		}
+	})
+	t.Run("implicit self", func(t *testing.T) {
+		instructions := compileInstructions(t, "puts\n")
+		if !hasOpcode(instructions, bytecode.OpSSEND0) {
+			t.Fatalf("bytecode does not contain SSEND0:\n%s", disassemble(t, "puts\n"))
+		}
+	})
+}
+
 func TestIndexOpcodes(t *testing.T) {
 	tests := []struct {
 		name string
