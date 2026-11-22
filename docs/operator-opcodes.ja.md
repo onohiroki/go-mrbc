@@ -366,7 +366,7 @@ go-mrbvm は `OpGETIDX` / `OpGETIDX0` / `OpSETIDX` / `OpAREF` / `OpASET`
 - `Integer` / `Float` の `+ - * / % ** << >> & | ^ ~ -@` を実メソッドとして登録
   - `alias_method` / `send` / `method_defined?` / `respond_to?` が組み込み実装を参照できる
   - 再定義されたメソッドは `send` と alias から優先して呼ばれる
-  - opcode 側の再定義フォールバックは Phase 3（`bopRedefined`）で追加
+  - opcode 側も `bopRedefined` が立っている間は `s.call` にフォールバックする
 
 ---
 
