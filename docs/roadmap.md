@@ -174,8 +174,9 @@ See [compatibility-report.md](compatibility-report.md) for the full snapshot.
 
 Status: implemented. `TestErrorCompatibility` checks exit status and located
 diagnostics (not exact wording). `TestRandomizedDifferential` runs 50 seeded
-programs by default. `.github/workflows/ci.yml` builds mruby 4.0.0 and runs
-`go vet`, `go test`, `cmd/compat -fail`, and `cmd/runtimecompat -fail`.
+programs by default and 200 in CI. `.github/workflows/ci.yml` builds mruby
+4.0.0 and runs `go vet`, `go test`, `cmd/compat -fail`, and
+`cmd/runtimecompat -fail`.
 
 ## Parallel project: go-mrbvm
 

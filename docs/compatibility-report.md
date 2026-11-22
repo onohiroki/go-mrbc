@@ -121,5 +121,8 @@ difference is found.
   located diagnostic, not the exact wording: Prism and mruby's parser produce
   different messages.
 - `TestRandomizedDifferential` generates programs within the supported subset
-  and compares both compiled binaries at runtime, using a fixed seed by
-  default.
+  and compares both compiled binaries at runtime. It covers arithmetic
+  (including bitwise and shift operators), floats, strings, arrays, hashes,
+  ranges, control flow, blocks, multiple assignment, pattern matching,
+  `rescue`/`ensure`, and classes. A fixed seed is used by default; CI runs 200
+  programs.

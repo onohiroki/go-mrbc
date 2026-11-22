@@ -429,7 +429,11 @@ M1 完了時点で「手続き型＋ブロック＋配列/ハッシュ」のマ�
       （mruby commit `c4627a60f`）
 - M8 で追加した検証:
   - `TestErrorCompatibility`: 不正プログラムの終了コードと位置付き診断を比較
-  - `TestRandomizedDifferential`: 固定シードで 50 プログラムを生成し実行比較
+  - `TestRandomizedDifferential`: 固定シードで生成したプログラムを両コンパイラで
+    実行比較。整数・ビット演算・シフト・浮動小数・文字列、比較/論理、
+    配列/ハッシュ/範囲、メソッド/ブロック、`while`/`until`/`for`、
+    `next`/`break`、複数代入、パターンマッチ、`rescue`/`ensure`、
+    クラス/ivars を生成し、CI では 200 回実行する
   - `TestReferenceNegativeImmediateOperatorOverrideBug` /
     `TestReferenceNextInsideRescueBug`: 上記の参照 mrbc 4.0.0 の
     既知の不具合に対して、go-mrbc が CRuby と同じ結果になることを確認
@@ -467,6 +471,7 @@ M1 完了時点で「手続き型＋ブロック＋配列/ハッシュ」のマ�
 ### 次の作業
 
 1. M4: 残りの最適化（MOVE のバイト列 peephole、`ARRAY2` など）
-2. ランダム差分テストの生成器拡張と CI での反復回数増加
+2. ランダム差分テストのさらなる拡張（`retry`/`redo`、より深いネスト、
+   シード行列による CI 実行）
 
 M0.5 は M0 と独立しているため、並行して進めてもよい。

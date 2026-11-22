@@ -128,12 +128,16 @@ different messages.
 `TestRandomizedDifferential` generates small programs within the supported
 subset, compiles them with both compilers, runs both binaries on mruby, and
 compares stdout, stderr, and exit status. The default is 50 programs with a
-fixed seed; `testing.Short()` reduces that to 10.
+fixed seed; `testing.Short()` reduces that to 10, and CI runs 200.
 
-The generator covers integer expressions, string interpolation, arrays,
-hashes, blocks, methods with keyword and splat parameters, and pattern
-matching. It deliberately avoids division and unbounded loops so that every
-generated program terminates.
+The generator covers integer, bitwise, shift, float, and string expressions;
+comparisons and logical operators; arrays, hashes, and ranges; methods with
+keyword and splat parameters; blocks and `yield`; `if`/`elsif`/`else`;
+`while`/`until`/`for` with `next`/`break`; multiple assignment; pattern
+matching; `rescue`/`ensure`; and classes with instance variables. Division and
+modulo use a nonzero literal divisor, and loops are bounded, so every
+generated program terminates. It deliberately avoids uncaught type errors and
+unbounded recursion.
 
 Environment variables:
 
