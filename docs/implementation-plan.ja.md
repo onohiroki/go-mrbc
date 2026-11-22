@@ -181,6 +181,8 @@ noblock:1 req:5 opt:5 rest:1 post:5 key:5 kdict:1 block:1
 - `&&` / `||` / `!` の短絡評価と真偽値判定だけは制御フローで実装する。
 - 後から `ADD` / `ADDI` / `EQ` / `LT` などを追加できる。
 - これにより、算術系 opcode の実装と検証を初期から切り離せる。
+- 性能差の主要因になっているため、追加手順は
+  [operator-opcodes.ja.md](operator-opcodes.ja.md) にまとめている。
 
 ### 6.4 SEND のエンコーディング
 
@@ -273,6 +275,8 @@ noblock:1 req:5 opt:5 rest:1 post:5 key:5 kdict:1 block:1
 | M2 | `CLASS/MODULE/EXEC/OCLASS/TCLASS`, `TDEF/SDEF/DEF`, `GETIV/SETIV`, `GETCV/SETCV`, `SETCONST/GETMCNST/SETMCNST`, `SUPER`, `ARGARY`, `KARG/KEY_P/KEYEND`, `LAMBDA`, `BREAK`, `RETURN_BLK`, `ARYPUSH/ARYCAT/ARYSPLAT/APOST`, `HASHADD/HASHCAT` |
 | M3 | `EXCEPT/RESCUE/RAISEIF`, `JMPUW`, catch handler table, `SCLASS`, `ALIAS/UNDEF` |
 | M4 | `MATCHERR`、最適化 opcode（`ADD` / `ADDI` / `SUB` / `EQ` / `LT` など、`SEND0` / `SSEND0`、短縮 `LOADI`） |
+
+最適化 opcode の実装計画は [operator-opcodes.ja.md](operator-opcodes.ja.md) を参照。
 
 `ENTER` の aspec と `SEND` のオペランド配置は、最初に単体テストで固める。
 

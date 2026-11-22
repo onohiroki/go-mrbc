@@ -94,7 +94,8 @@ information, and a practical pattern-matching subset are implemented.
 - Performance improvements.
 
 Status: `defined?` and hash patterns are implemented. Alternation, find, and
-array-rest patterns remain. Optimized opcodes are not started.
+array-rest patterns remain. Optimized opcodes are not started; see
+[operator-opcodes.ja.md](operator-opcodes.ja.md) for the implementation plan.
 
 ## M5 - Compatibility harness
 
