@@ -494,6 +494,9 @@ go build -o bin/mrbtest ./cmd/mrbtest
 
 - `+ - * / == < <= > >=` → `OP_ADD` 〜 `OP_GE`
 - `x + 1` / `x - 2`（0〜255 の整数リテラル）→ `OP_ADDI` / `OP_SUBI`
+  - 負の即値は畳み込まない。参照 `mrbc` 4.0.0 は `q + -5` を `SUBI 5` に
+    畳んで `-` を呼ぶ #2557 の不具合があるが、go-mrbc は CRuby と同じく
+    `+` に -5 を渡す（`mrbc/reference_bug_test.go`）
 - `x += 1` / `x -= 1`（ローカル）→ `OP_ADDILV` / `OP_SUBILV`
 - `a[i]` / `a[0]` / `a[i] = v` → `OP_GETIDX` / `OP_GETIDX0` / `OP_SETIDX`
 - 引数なし呼び出し → `OP_SEND0` / `OP_SSEND0`

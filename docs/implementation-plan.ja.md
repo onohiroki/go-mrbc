@@ -417,12 +417,22 @@ M1 完了時点で「手続き型＋ブロック＋配列/ハッシュ」のマ�
 - 実行時一致ハーネス `cmd/runtimecompat`（`assert.rb` を前置して実行）
   - mruby 4.0.0 タグ: 実行可能 106 ファイル中、一致 106（デフォルト `mrbc`）
   - 開発ツリー（`4.0.0-3011-gdbab56510`）: 実行可能 160 ファイル中、
-    一致 148、出力差 9、参照コンパイル不可 1、両方コンパイル不可 2
-  - 出力差 9 は、デフォルト `mrbc` の最適化 opcode により参照側が
-    失敗するテストを `go-mrbc` が通すケース（演算子再定義など）
+    一致 155、出力差 2、参照コンパイル不可 1、両方コンパイル不可 2
+  - 残る出力差 2 は参照 `mrbc` 4.0.0 バイナリ側の既知の不具合で、
+    go-mrbc は CRuby と一致する（開発ツリーでは修正済み）
+    - `literals.rb` の #2557: 参照は `q + -5` を `SUBI 5` に畳み、
+      `+` ではなく `-` を呼ぶ。go-mrbc は負の即値を畳まないため
+      `+` に -5 を渡す（mruby commits `b4f645050`, `9f66fb063`）
+    - `exception.rb` の "next inside rescue continues the loop":
+      参照は rescue 内の `next` がループを継続せず assert ブロックを
+      抜けるコードを生成する。go-mrbc はループを継続して 300 を返す
+      （mruby commit `c4627a60f`）
 - M8 で追加した検証:
   - `TestErrorCompatibility`: 不正プログラムの終了コードと位置付き診断を比較
   - `TestRandomizedDifferential`: 固定シードで 50 プログラムを生成し実行比較
+  - `TestReferenceNegativeImmediateOperatorOverrideBug` /
+    `TestReferenceNextInsideRescueBug`: 上記の参照 mrbc 4.0.0 の
+    既知の不具合に対して、go-mrbc が CRuby と同じ結果になることを確認
   - `.github/workflows/ci.yml`: mruby 4.0.0 をビルドし、`compat -fail` と
     `runtimecompat -fail` を実行
 - M6 で修正したコード生成の不具合:
