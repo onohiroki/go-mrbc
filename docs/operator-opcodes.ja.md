@@ -336,7 +336,7 @@ go-mrbvm は `OpGETIDX` / `OpGETIDX0` / `OpSETIDX` / `OpAREF` / `OpASET`
 | 項目 | 注意 |
 | --- | --- |
 | 非整数レシーバ | opcode は VM が SEND にフォールバックする。型判定は不要 |
-| ユーザー定義演算子 | 公式 VM は `bop_redefined` で判定。go-mrbvm は整数高速パスを優先するが、C mruby 4.0.0 でも同じ結果になることを確認済み |
+| ユーザー定義演算子 | VM は組み込み演算子を実メソッドとして持ち、再定義時は `send` / alias / opcode の順でそのメソッドを優先する（Phase 2 で `send` / alias、Phase 3 で opcode） |
 | 即値の範囲 | `ADDI` / `SUBI` / `ADDILV` / `SUBILV` は 0〜255 の非負のみ |
 | レジスタ番号 | `OP_ADD` 系は 8bit operand。`base > 255` は SEND のまま |
 | block / keyword / splat | 1 つでもあれば SEND のまま |
@@ -352,7 +352,7 @@ go-mrbvm は `OpGETIDX` / `OpGETIDX0` / `OpSETIDX` / `OpAREF` / `OpASET`
 
 ## 6. go-mrbvm 側の受け入れ状況
 
-以下は実装済み・高速化済み。追加実装は不要。
+以下は実装済み・高速化済み。
 
 - `OpADD` / `OpSUB` / `OpMUL` / `OpDIV` / `OpEQ` / `OpLT` / `OpLE` /
   `OpGT` / `OpGE`
@@ -363,6 +363,10 @@ go-mrbvm は `OpGETIDX` / `OpGETIDX0` / `OpSETIDX` / `OpAREF` / `OpASET`
 - `OpGETIDX` / `OpGETIDX0` / `OpSETIDX` / `OpAREF` / `OpASET`
 - ジャンプ先・演算子 ID のデコード時事前計算
 - バックトレース行は「呼び出し時・例外時」だけ計算
+- `Integer` / `Float` の `+ - * / % ** << >> & | ^ ~ -@` を実メソッドとして登録
+  - `alias_method` / `send` / `method_defined?` / `respond_to?` が組み込み実装を参照できる
+  - 再定義されたメソッドは `send` と alias から優先して呼ばれる
+  - opcode 側の再定義フォールバックは Phase 3（`bopRedefined`）で追加
 
 ---
 
