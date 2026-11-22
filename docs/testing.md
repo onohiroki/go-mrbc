@@ -33,7 +33,7 @@ when the tools are unavailable, but continuous integration requires them.
 Programs live under `conformance/testdata/conformance/` and are embedded by the `conformance` package. Each case is a directory:
 
 ```
-conformance/testdata/conformance/basic_puts/
+conformance/testdata/conformance/basic_hello/
     main.rb
     stdout.txt
     status.txt     # optional, defaults to 0
