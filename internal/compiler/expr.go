@@ -62,28 +62,7 @@ func (c *Compiler) compileExpr(s *scope, expr frontend.Expr, dst int) {
 			s.emit(bytecode.OpGETUPVAR, uint32(dst), uint32(slot), uint32(level))
 		}
 	case *frontend.LocalWrite:
-		if c.compileLocalOpAssign(s, e, dst) {
-			return
-		}
-		value := s.alloc(1)
-		c.compileExpr(s, e.Value, value)
-		depth := s.effectiveDepth(e.Depth)
-		if depth == 0 {
-			slot, ok := s.locals[e.Name]
-			if !ok {
-				c.failExpr(e, "unknown local variable %q", e.Name)
-				return
-			}
-			s.emitMove(slot, value)
-		} else {
-			slot, level, ok := s.resolveUpvar(e.Name, depth)
-			if !ok {
-				c.failExpr(e, "cannot resolve captured local variable %q", e.Name)
-				return
-			}
-			s.emit(bytecode.OpSETUPVAR, uint32(value), uint32(slot), uint32(level))
-		}
-		s.emitMove(dst, value)
+		c.compileLocalWrite(s, e, dst, true)
 
 	case *frontend.GlobalRead:
 		s.emit(bytecode.OpGETGV, uint32(dst), s.sym(e.Name))
@@ -474,8 +453,8 @@ func (c *Compiler) compileWhile(s *scope, e *frontend.WhileExpr, dst int) {
 	s.asm.bind(bodyStart)
 	prevRedo, prevHasRedo := s.redoTarget, s.hasRedo
 	s.redoTarget, s.hasRedo = bodyStart, true
-	body := s.alloc(1)
-	c.compileBody(s, []frontend.Expr{e.Body}, body)
+	// A while loop's value is nil, so the body result is discarded.
+	c.compileStmt(s, e.Body)
 	s.redoTarget, s.hasRedo = prevRedo, prevHasRedo
 	s.loop = previous
 
@@ -1387,23 +1366,43 @@ func (c *Compiler) compileCall(s *scope, e *frontend.Call, dst int) {
 		s.asm.jmpIf(bytecode.OpJMPNIL, receiver, nilLabel)
 		clone := *e
 		clone.SafeNavigation = false
-		c.compileCallPrepared(s, &clone, dst, receiver)
+		c.compileCallPrepared(s, &clone, dst, receiver, true)
 		s.asm.jmp(endLabel)
 		s.asm.bind(nilLabel)
 		s.emit(bytecode.OpLOADNIL, uint32(dst))
 		s.asm.bind(endLabel)
 		return
 	}
-	c.compileCallPrepared(s, e, dst, -1)
+	c.compileCallPrepared(s, e, dst, -1, true)
 }
 
-func (c *Compiler) compileCallPrepared(s *scope, e *frontend.Call, dst, preReceiver int) {
+// compileCallDiscard compiles a call whose return value is not used. It is
+// the same call, only without the final copy into a result register.
+func (c *Compiler) compileCallDiscard(s *scope, e *frontend.Call) {
+	if e.SafeNavigation && e.Receiver != nil {
+		receiver := s.alloc(1)
+		c.compileExpr(s, e.Receiver, receiver)
+		nilLabel := s.asm.newLabel()
+		endLabel := s.asm.newLabel()
+		s.asm.jmpIf(bytecode.OpJMPNIL, receiver, nilLabel)
+		clone := *e
+		clone.SafeNavigation = false
+		c.compileCallPrepared(s, &clone, 0, receiver, false)
+		s.asm.jmp(endLabel)
+		s.asm.bind(nilLabel)
+		s.asm.bind(endLabel)
+		return
+	}
+	c.compileCallPrepared(s, e, 0, -1, false)
+}
+
+func (c *Compiler) compileCallPrepared(s *scope, e *frontend.Call, dst, preReceiver int, wantResult bool) {
 	if e.Block != nil && e.BlockArg != nil {
 		c.failExpr(e, "both a block and a block argument are not allowed")
 		return
 	}
 	if e.ForwardAll {
-		c.compileForwardAll(s, e, dst)
+		c.compileForwardAll(s, e, dst, wantResult)
 		return
 	}
 
@@ -1476,13 +1475,17 @@ func (c *Compiler) compileCallPrepared(s *scope, e *frontend.Call, dst, preRecei
 				// The argument is a side-effect-free literal, so the
 				// immediate form does not need to load it at all.
 				s.emit(imm, uint32(base), uint32(lit))
-				s.emitMove(dst, base)
+				if wantResult {
+					s.emitMove(dst, base)
+				}
 				return
 			}
 		}
 		c.compileExpr(s, e.Args[0], base+1)
 		s.emit(arith, uint32(base))
-		s.emitMove(dst, base)
+		if wantResult {
+			s.emitMove(dst, base)
+		}
 		return
 	}
 	if packedArgs {
@@ -1523,6 +1526,9 @@ func (c *Compiler) compileCallPrepared(s *scope, e *frontend.Call, dst, preRecei
 		}
 	}
 	s.emit(op, uint32(base), s.sym(e.Name), argInfo)
+	if !wantResult {
+		return
+	}
 	if isSetterName(e.Name) && !e.ImplicitSelf() {
 		// An attribute assignment expression evaluates to the assigned value,
 		// not to the setter method's return value.
@@ -1539,10 +1545,71 @@ func (c *Compiler) compileCallPrepared(s *scope, e *frontend.Call, dst, preRecei
 	s.emitMove(dst, base)
 }
 
+// compileLocalWrite assigns e.Value to the local. When wantResult is false
+// the assignment's value is discarded and no copy to dst is emitted.
+func (c *Compiler) compileLocalWrite(s *scope, e *frontend.LocalWrite, dst int, wantResult bool) {
+	if c.compileLocalOpAssign(s, e, dst, wantResult) {
+		return
+	}
+	depth := s.effectiveDepth(e.Depth)
+	if depth == 0 {
+		slot, ok := s.locals[e.Name]
+		if !ok {
+			c.failExpr(e, "unknown local variable %q", e.Name)
+			return
+		}
+		if simpleValue(e.Value) {
+			// The value has no side effects, so assign it straight to the
+			// local slot instead of going through a temporary.
+			c.compileExpr(s, e.Value, slot)
+			if wantResult {
+				s.emitMove(dst, slot)
+			}
+			return
+		}
+		value := s.alloc(1)
+		c.compileExpr(s, e.Value, value)
+		s.emitMove(slot, value)
+		if wantResult {
+			s.emitMove(dst, value)
+		}
+		return
+	}
+
+	value := s.alloc(1)
+	c.compileExpr(s, e.Value, value)
+	slot, level, ok := s.resolveUpvar(e.Name, depth)
+	if !ok {
+		c.failExpr(e, "cannot resolve captured local variable %q", e.Name)
+		return
+	}
+	s.emit(bytecode.OpSETUPVAR, uint32(value), uint32(slot), uint32(level))
+	if wantResult {
+		s.emitMove(dst, value)
+	}
+}
+
+// simpleValue reports whether expr is a side-effect-free value that can be
+// compiled directly into a local slot.
+func simpleValue(expr frontend.Expr) bool {
+	switch e := expr.(type) {
+	case *frontend.NilLiteral, *frontend.TrueLiteral, *frontend.FalseLiteral,
+		*frontend.SelfExpr, *frontend.IntegerLiteral, *frontend.BigIntLiteral,
+		*frontend.FloatLiteral, *frontend.StringLiteral, *frontend.SymbolLiteral,
+		*frontend.LocalRead:
+		return true
+	case *frontend.ArrayLiteral:
+		return len(e.Elements) == 0
+	case *frontend.HashLiteral:
+		return len(e.Pairs) == 0
+	}
+	return false
+}
+
 // compileLocalOpAssign fuses `x += n` and `x -= n` on a plain local into
 // OP_ADDILV / OP_SUBILV. The local is both the receiver and the destination,
 // which is only valid while it is not captured from an outer scope.
-func (c *Compiler) compileLocalOpAssign(s *scope, e *frontend.LocalWrite, dst int) bool {
+func (c *Compiler) compileLocalOpAssign(s *scope, e *frontend.LocalWrite, dst int, wantResult bool) bool {
 	if s.effectiveDepth(e.Depth) != 0 {
 		return false
 	}
@@ -1575,7 +1642,9 @@ func (c *Compiler) compileLocalOpAssign(s *scope, e *frontend.LocalWrite, dst in
 		op = bytecode.OpSUBILV
 	}
 	s.emit(op, uint32(slot), uint32(temp), uint32(lit.Value))
-	s.emitMove(dst, slot)
+	if wantResult {
+		s.emitMove(dst, slot)
+	}
 	return true
 }
 
@@ -1647,7 +1716,7 @@ func (c *Compiler) compileKeywordHash(s *scope, keywords []frontend.KeywordArg, 
 	s.sp = headerSP
 }
 
-func (c *Compiler) compileForwardAll(s *scope, e *frontend.Call, dst int) {
+func (c *Compiler) compileForwardAll(s *scope, e *frontend.Call, dst int, wantResult bool) {
 	if s.method == nil || s.method.methodInfo == nil || s.yieldLevel < 0 {
 		c.failExpr(e, "argument forwarding is not available here")
 		return
@@ -1696,7 +1765,9 @@ func (c *Compiler) compileForwardAll(s *scope, e *frontend.Call, dst int) {
 	}
 	argInfo := uint32(15) | uint32(keywordCount)<<4
 	s.emit(op, uint32(base), s.sym(e.Name), argInfo)
-	s.emitMove(dst, base)
+	if wantResult {
+		s.emitMove(dst, base)
+	}
 }
 
 func (c *Compiler) emitMethodSlot(s *scope, dst, slot int) {

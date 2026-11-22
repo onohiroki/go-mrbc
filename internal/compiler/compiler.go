@@ -78,9 +78,39 @@ func (c *Compiler) compileBody(s *scope, body []frontend.Expr, dst int) {
 			c.compileExpr(s, expr, dst)
 			continue
 		}
+		c.compileStmt(s, expr)
+		s.sp = sp0
+	}
+}
+
+// compileStmt compiles an expression whose value is discarded. Cases that
+// would otherwise materialize a temporary just to drop it skip that copy.
+func (c *Compiler) compileStmt(s *scope, expr frontend.Expr) {
+	if c.err != nil || expr == nil {
+		return
+	}
+	s.markLine(expr.Position())
+	sp0 := s.sp
+	defer func() { s.sp = sp0 }()
+
+	switch e := expr.(type) {
+	case *frontend.NilLiteral, *frontend.TrueLiteral, *frontend.FalseLiteral,
+		*frontend.IntegerLiteral, *frontend.FloatLiteral, *frontend.BigIntLiteral,
+		*frontend.StringLiteral, *frontend.SymbolLiteral,
+		*frontend.LocalRead, *frontend.SelfExpr:
+		// Literals and local reads have no side effects.
+		return
+	case *frontend.LocalWrite:
+		c.compileLocalWrite(s, e, 0, false)
+	case *frontend.Call:
+		c.compileCallDiscard(s, e)
+	case *frontend.Statements:
+		for _, stmt := range e.Body {
+			c.compileStmt(s, stmt)
+		}
+	default:
 		tmp := s.alloc(1)
 		c.compileExpr(s, expr, tmp)
-		s.sp = sp0
 	}
 }
 
