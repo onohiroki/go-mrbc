@@ -1464,7 +1464,10 @@ func (c *Compiler) compileCallPrepared(s *scope, e *frontend.Call, dst, preRecei
 	// itself, so no copy out of base is needed.
 	need := 1 + positionalRegs + keywordRegs + blockRegs
 	base := dst
-	reuseDst := wantResult && dst == s.sp-1
+	// []= keeps the assigned value in base+2, which a fallback send may
+	// clobber, so its result is copied to dst before the instruction and the
+	// receiver cannot share dst.
+	reuseDst := wantResult && dst == s.sp-1 && e.Name != "[]="
 	if !reuseDst {
 		base = s.alloc(need)
 	} else {
@@ -1480,34 +1483,63 @@ func (c *Compiler) compileCallPrepared(s *scope, e *frontend.Call, dst, preRecei
 			c.compileAt(s, e.Receiver, base, reservedSP)
 		}
 	}
-	// A builtin one-argument operator can use the dedicated arithmetic
-	// opcode. The VM falls back to a regular method call for non-integer
-	// receivers and redefined operators, so no type check is needed here.
-	if arith, ok := arithOpcode(e.Name); ok &&
-		!e.ImplicitSelf() && !packedArgs && !hasBlock &&
-		len(e.Keywords) == 0 && n == 1 && base <= math.MaxUint8 {
-		if arith == bytecode.OpADD || arith == bytecode.OpSUB {
-			if lit, ok := integerLiteral(e.Args[0]); ok &&
-				lit >= 0 && lit <= math.MaxUint8 {
-				imm := bytecode.OpADDI
-				if arith == bytecode.OpSUB {
-					imm = bytecode.OpSUBI
+	// Builtin one-argument operators and index access can use dedicated
+	// opcodes. The VM falls back to a regular method call for other
+	// receivers, redefined operators, and index methods, so no type check is
+	// needed here.
+	if !e.ImplicitSelf() && !packedArgs && !hasBlock &&
+		len(e.Keywords) == 0 && base <= math.MaxUint8 {
+		if arith, ok := arithOpcode(e.Name); ok && n == 1 {
+			if arith == bytecode.OpADD || arith == bytecode.OpSUB {
+				if lit, ok := integerLiteral(e.Args[0]); ok &&
+					lit >= 0 && lit <= math.MaxUint8 {
+					imm := bytecode.OpADDI
+					if arith == bytecode.OpSUB {
+						imm = bytecode.OpSUBI
+					}
+					// The argument is a side-effect-free literal, so the
+					// immediate form does not need to load it at all.
+					s.emit(imm, uint32(base), uint32(lit))
+					if wantResult {
+						s.emitMove(dst, base)
+					}
+					return
 				}
-				// The argument is a side-effect-free literal, so the
-				// immediate form does not need to load it at all.
-				s.emit(imm, uint32(base), uint32(lit))
-				if wantResult {
-					s.emitMove(dst, base)
-				}
-				return
 			}
+			c.compileAt(s, e.Args[0], base+1, reservedSP)
+			s.emit(arith, uint32(base))
+			if wantResult {
+				s.emitMove(dst, base)
+			}
+			return
 		}
-		c.compileAt(s, e.Args[0], base+1, reservedSP)
-		s.emit(arith, uint32(base))
-		if wantResult {
-			s.emitMove(dst, base)
+		switch {
+		case e.Name == "[]" && n == 1:
+			// GETIDX0 takes the index from the opcode and uses a+1 for the
+			// fallback call, so the zero does not need to be loaded.
+			if lit, ok := integerLiteral(e.Args[0]); ok && lit == 0 {
+				s.emit(bytecode.OpGETIDX0, uint32(base), uint32(base))
+			} else {
+				c.compileAt(s, e.Args[0], base+1, reservedSP)
+				s.emit(bytecode.OpGETIDX, uint32(base))
+			}
+			if wantResult {
+				s.emitMove(dst, base)
+			}
+			return
+		case e.Name == "[]=" && n == 2:
+			c.compileAt(s, e.Args[0], base+1, reservedSP)
+			c.compileAt(s, e.Args[1], base+2, reservedSP)
+			if wantResult {
+				// An assignment expression evaluates to the assigned value,
+				// not to the return value of the []= method. Copy it before
+				// the instruction because a fallback send reuses these
+				// registers.
+				s.emitMove(dst, base+2)
+			}
+			s.emit(bytecode.OpSETIDX, uint32(base))
+			return
 		}
-		return
 	}
 	if packedArgs {
 		c.buildArgArray(s, e.Args, base+1)
@@ -1550,9 +1582,9 @@ func (c *Compiler) compileCallPrepared(s *scope, e *frontend.Call, dst, preRecei
 	if !wantResult {
 		return
 	}
-	if isSetterName(e.Name) && !e.ImplicitSelf() {
-		// An attribute assignment expression evaluates to the assigned value,
-		// not to the setter method's return value.
+	if (isSetterName(e.Name) || (e.Name == "[]=" && !packedArgs)) && !e.ImplicitSelf() {
+		// An assignment expression evaluates to the assigned value, not to
+		// the setter method's return value.
 		switch {
 		case packedArgs:
 			s.emitMove(dst, base+1)

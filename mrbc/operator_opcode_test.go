@@ -191,6 +191,27 @@ func TestLocalOpAssignInBlock(t *testing.T) {
 	}
 }
 
+func TestIndexOpcodes(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want bytecode.Opcode
+	}{
+		{"zero index", "a = [1, 2]\na[0]\n", bytecode.OpGETIDX0},
+		{"variable index", "a = [1, 2]\ni = 1\na[i]\n", bytecode.OpGETIDX},
+		{"index write", "a = [1, 2]\ni = 1\na[i] = 3\n", bytecode.OpSETIDX},
+		{"hash write", "h = {}\nh[:x] = 1\n", bytecode.OpSETIDX},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			instructions := compileInstructions(t, tt.src)
+			if !hasOpcode(instructions, tt.want) {
+				t.Fatalf("bytecode does not contain %s:\n%s", tt.want, disassemble(t, tt.src))
+			}
+		})
+	}
+}
+
 func TestLocalOpAssignInstructionCount(t *testing.T) {
 	src := "def bump(n)\n  x = n\n  x += 1\n  x - 2\nend\n"
 	irep := compileIrep(t, src)
