@@ -36,7 +36,7 @@ English summary.
 - [x] M7 remaining pattern and control-flow syntax
 - [x] M8 error compatibility, randomized differential tests, and 4.0.0 CI
 - [x] `super`, `yield`, and `...` forwarding inside lambdas
-- [ ] Optimized opcodes
+- [x] Optimized opcodes
 
 ## M0 - Parser integration
 
@@ -94,8 +94,9 @@ information, and a practical pattern-matching subset are implemented.
 - Performance improvements.
 
 Status: `defined?` and hash patterns are implemented. Alternation, find, and
-array-rest patterns remain. Optimized opcodes are not started; see
-[operator-opcodes.ja.md](operator-opcodes.ja.md) for the implementation plan.
+array-rest patterns remain. Optimized opcodes are implemented; see
+[operator-opcodes.ja.md](operator-opcodes.ja.md) for the contract and the
+VM-side fallback.
 
 ## M5 - Compatibility harness
 

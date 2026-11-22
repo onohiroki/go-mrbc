@@ -194,7 +194,9 @@ make runtime   # runtime-parity check against mruby's test tree
 ```
 
 Conformance tests require mruby 4.0.0 and `mrbc` on `PATH`; see
-[Testing](docs/testing.md).
+[Testing](docs/testing.md). The corpus itself lives in
+`conformance/testdata/conformance/` and is embedded by the `conformance`
+package so that `go-mrbvm` runs the same cases.
 
 ## License
 

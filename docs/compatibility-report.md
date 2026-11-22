@@ -108,6 +108,8 @@ difference is found.
 
 ## Notes
 
+- The conformance corpus is embedded by the `conformance` package and also
+  consumed by `go-mrbvm`, so compiler and VM run identical cases.
 - The runtime harness prepends mruby's `test/assert.rb`, supplies `t_print`,
   and appends a deterministic summary line so the files can run under a plain
   `mruby` binary instead of `mrbtest`.
