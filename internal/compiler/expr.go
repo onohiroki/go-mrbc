@@ -62,6 +62,9 @@ func (c *Compiler) compileExpr(s *scope, expr frontend.Expr, dst int) {
 			s.emit(bytecode.OpGETUPVAR, uint32(dst), uint32(slot), uint32(level))
 		}
 	case *frontend.LocalWrite:
+		if c.compileLocalOpAssign(s, e, dst) {
+			return
+		}
 		value := s.alloc(1)
 		c.compileExpr(s, e.Value, value)
 		depth := s.effectiveDepth(e.Depth)
@@ -1534,6 +1537,46 @@ func (c *Compiler) compileCallPrepared(s *scope, e *frontend.Call, dst, preRecei
 		return
 	}
 	s.emitMove(dst, base)
+}
+
+// compileLocalOpAssign fuses `x += n` and `x -= n` on a plain local into
+// OP_ADDILV / OP_SUBILV. The local is both the receiver and the destination,
+// which is only valid while it is not captured from an outer scope.
+func (c *Compiler) compileLocalOpAssign(s *scope, e *frontend.LocalWrite, dst int) bool {
+	if s.effectiveDepth(e.Depth) != 0 {
+		return false
+	}
+	call, ok := e.Value.(*frontend.Call)
+	if !ok || call.SafeNavigation || call.ForwardAll ||
+		call.Block != nil || call.BlockArg != nil ||
+		len(call.Keywords) != 0 || len(call.Args) != 1 {
+		return false
+	}
+	if call.Name != "+" && call.Name != "-" {
+		return false
+	}
+	read, ok := call.Receiver.(*frontend.LocalRead)
+	if !ok || read.Name != e.Name || s.effectiveDepth(read.Depth) != 0 {
+		return false
+	}
+	lit, ok := call.Args[0].(*frontend.IntegerLiteral)
+	if !ok || lit.Value < 0 || lit.Value > math.MaxUint8 {
+		return false
+	}
+	slot, ok := s.locals[e.Name]
+	if !ok || slot > math.MaxUint8 || s.sp > math.MaxUint8 {
+		return false
+	}
+	// The working register is unused by go-mrbvm, but mruby's codegen
+	// reserves it for the method-call fallback.
+	temp := s.alloc(1)
+	op := bytecode.OpADDILV
+	if call.Name == "-" {
+		op = bytecode.OpSUBILV
+	}
+	s.emit(op, uint32(slot), uint32(temp), uint32(lit.Value))
+	s.emitMove(dst, slot)
+	return true
 }
 
 // integerLiteral returns the value of expr when it is an integer literal.

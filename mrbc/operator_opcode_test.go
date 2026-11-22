@@ -2,6 +2,7 @@ package mrbc_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -136,6 +137,87 @@ func TestIntegerImmediateOutOfRangeStaysArithmetic(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLocalOpAssignOpcodes(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want bytecode.Opcode
+	}{
+		{"add", "def bump(n)\n  x = n\n  x += 1\n  x\nend\n", bytecode.OpADDILV},
+		{"sub", "def bump(n)\n  x = n\n  x -= 2\n  x\nend\n", bytecode.OpSUBILV},
+		{"parameter", "def bump(x)\n  x += 1\n  x\nend\n", bytecode.OpADDILV},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			instructions := allInstructions(t, compileIrep(t, tt.src))
+			for _, in := range instructions {
+				if in.Op == tt.want {
+					return
+				}
+			}
+			t.Fatalf("bytecode does not contain %s:\n%s", tt.want, disassemble(t, tt.src))
+		})
+	}
+}
+
+func TestLocalOpAssignNotFused(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+	}{
+		{"captured local", "x = 0\n[1].each { x += 1 }\n"},
+		{"non literal", "def f(a, b)\n  a += b\n  a\nend\n"},
+		{"negative literal", "def f(a)\n  a += -1\n  a\nend\n"},
+		{"large literal", "def f(a)\n  a += 256\n  a\nend\n"},
+		{"attribute", "class C\n  attr_accessor :value\nend\nc = C.new\nc.value = 0\nc.value += 1\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			instructions := allInstructions(t, compileIrep(t, tt.src))
+			if hasOpcode(instructions, bytecode.OpADDILV) || hasOpcode(instructions, bytecode.OpSUBILV) {
+				t.Fatalf("unexpected fused opcode:\n%s", disassemble(t, tt.src))
+			}
+		})
+	}
+}
+
+func TestLocalOpAssignInBlock(t *testing.T) {
+	src := "[1].each do\n  x = 0\n  x += 1\nend\n"
+	instructions := allInstructions(t, compileIrep(t, src))
+	if !hasOpcode(instructions, bytecode.OpADDILV) {
+		t.Fatalf("block-local += was not fused:\n%s", disassemble(t, src))
+	}
+}
+
+func TestOperatorOpcodeRegisterLimit(t *testing.T) {
+	var top strings.Builder
+	var method strings.Builder
+	method.WriteString("def big\n")
+	for i := 0; i < 260; i++ {
+		fmt.Fprintf(&top, "v%d = %d\n", i, i)
+		fmt.Fprintf(&method, "  v%d = %d\n", i, i)
+	}
+	top.WriteString("v0 + v1\n")
+	method.WriteString("  v259 += 1\n  v259\nend\nbig\n")
+
+	t.Run("add", func(t *testing.T) {
+		instructions := compileInstructions(t, top.String())
+		if hasOpcode(instructions, bytecode.OpADD) || hasOpcode(instructions, bytecode.OpADDI) {
+			t.Fatalf("operator with register > 255 was encoded as an opcode")
+		}
+		if !hasOpcode(instructions, bytecode.OpSEND) {
+			t.Fatalf("operator with register > 255 did not fall back to SEND")
+		}
+	})
+
+	t.Run("local op assign", func(t *testing.T) {
+		instructions := allInstructions(t, compileIrep(t, method.String()))
+		if hasOpcode(instructions, bytecode.OpADDILV) {
+			t.Fatalf("x += 1 with slot > 255 was fused")
+		}
+	})
 }
 
 func disassemble(t *testing.T, src string) string {
