@@ -430,7 +430,7 @@ cd /Users/hiroki/MyProjects/go-mrbvm
 
 go test ./...
 go build -o bin/vmcompat ./cmd/vmcompat
-./bin/vmcompat testdata/conformance/*/main.rb
+./bin/vmcompat -corpus
 
 go build -o bin/mrbtest ./cmd/mrbtest
 ./bin/mrbtest -manifest testdata/official.txt
@@ -502,7 +502,7 @@ go build -o bin/mrbtest ./cmd/mrbtest
 - 引数なし呼び出し → `OP_SEND0` / `OP_SSEND0`
 
 テストは `mrbc/operator_opcode_test.go`（opcode の存在・非融合条件・命令数）と
-`testdata/conformance/operator_opcodes/`（C mruby での実行結果一致）に追加した。
+`conformance/testdata/conformance/operator_opcodes/`（C mruby での実行結果一致）に追加した。
 
 ### 推奨コミット粒度
 

@@ -30,10 +30,10 @@ when the tools are unavailable, but continuous integration requires them.
 
 ## Conformance corpus
 
-Programs live under `testdata/conformance/`. Each case is a directory:
+Programs live under `conformance/testdata/conformance/` and are embedded by the `conformance` package. Each case is a directory:
 
 ```
-testdata/conformance/basic_puts/
+conformance/testdata/conformance/basic_puts/
     main.rb
     stdout.txt
     status.txt     # optional, defaults to 0

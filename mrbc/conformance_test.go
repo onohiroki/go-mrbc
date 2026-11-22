@@ -2,12 +2,15 @@ package mrbc_test
 
 import (
 	"context"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/onohiroki/go-mrbc/conformance"
 	"github.com/onohiroki/go-mrbc/mrbc"
 	"github.com/onohiroki/go-mrbc/toolchain"
 )
@@ -25,38 +28,41 @@ func TestConformance(t *testing.T) {
 		t.Skipf("mruby 4.0.0 is required: %v", err)
 	}
 
-	root := filepath.Join("..", "testdata", "conformance")
-	entries, err := os.ReadDir(root)
+	cases, err := conformance.Cases()
 	if err != nil {
-		t.Fatalf("read conformance directory: %v", err)
+		t.Fatalf("list conformance cases: %v", err)
 	}
 
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
+	for _, name := range cases {
 		t.Run(name, func(t *testing.T) {
-			dir := filepath.Join(root, name)
-			mainPath := filepath.Join(dir, "main.rb")
-			if _, err := os.Stat(mainPath); err != nil {
-				t.Fatalf("missing main.rb: %v", err)
+			source, err := fs.ReadFile(conformance.FS, name+"/main.rb")
+			if err != nil {
+				t.Fatalf("read main.rb: %v", err)
 			}
-
-			tmp := t.TempDir()
-			wantStdout, err := os.ReadFile(filepath.Join(dir, "stdout.txt"))
+			wantStdout, err := fs.ReadFile(conformance.FS, name+"/stdout.txt")
 			if err != nil {
 				t.Fatalf("read stdout.txt: %v", err)
 			}
 			wantStatus := 0
-			if data, err := os.ReadFile(filepath.Join(dir, "status.txt")); err == nil {
+			if data, ok := readOptional(t, name+"/status.txt"); ok {
 				status, err := strconv.Atoi(strings.TrimSpace(string(data)))
 				if err != nil {
 					t.Fatalf("parse status.txt: %v", err)
 				}
 				wantStatus = status
 			}
-			args := readArgs(t, filepath.Join(dir, "args.txt"))
+			args := readArgs(t, name+"/args.txt")
+			wantStderr, hasStderr := readOptional(t, name+"/stderr.txt")
+
+			tmp := t.TempDir()
+			mainPath := filepath.Join(tmp, "main.rb")
+			if err := os.WriteFile(mainPath, source, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			ours, err := mrbc.CompileFile(context.Background(), mainPath, mrbc.Options{FilePath: name + "/main.rb"})
+			if err != nil {
+				t.Fatalf("compile with go-mrbc: %v", err)
+			}
 
 			reference := filepath.Join(tmp, "reference.mrb")
 			result, err := toolchain.Run(mrbcPath, "-o", reference, mainPath)
@@ -68,10 +74,6 @@ func TestConformance(t *testing.T) {
 			}
 
 			oursBinary := filepath.Join(tmp, "ours.mrb")
-			ours, err := mrbc.CompileFile(context.Background(), mainPath, mrbc.Options{})
-			if err != nil {
-				t.Fatalf("compile with go-mrbc: %v", err)
-			}
 			if err := os.WriteFile(oursBinary, ours, 0o644); err != nil {
 				t.Fatal(err)
 			}
@@ -94,10 +96,8 @@ func TestConformance(t *testing.T) {
 			if ourRun.Stdout != refRun.Stdout {
 				t.Fatalf("go-mrbc and mrbc disagree:\n go-mrbc %q\n mrbc    %q", ourRun.Stdout, refRun.Stdout)
 			}
-			if wantStderr, err := os.ReadFile(filepath.Join(dir, "stderr.txt")); err == nil {
-				if ourRun.Stderr != string(wantStderr) {
-					t.Fatalf("go-mrbc stderr mismatch:\n got %q\nwant %q", ourRun.Stderr, string(wantStderr))
-				}
+			if hasStderr && ourRun.Stderr != string(wantStderr) {
+				t.Fatalf("go-mrbc stderr mismatch:\n got %q\nwant %q", ourRun.Stderr, string(wantStderr))
 			}
 		})
 	}
@@ -112,14 +112,23 @@ func runMruby(t *testing.T, mruby, path string, args []string) toolchain.Result 
 	return result
 }
 
-func readArgs(t *testing.T, path string) []string {
+func readOptional(t *testing.T, name string) ([]byte, bool) {
 	t.Helper()
-	data, err := os.ReadFile(path)
+	data, err := fs.ReadFile(conformance.FS, name)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, false
 		}
-		t.Fatalf("read args.txt: %v", err)
+		t.Fatalf("read %s: %v", name, err)
+	}
+	return data, true
+}
+
+func readArgs(t *testing.T, name string) []string {
+	t.Helper()
+	data, ok := readOptional(t, name)
+	if !ok {
+		return nil
 	}
 	var args []string
 	for _, line := range strings.Split(string(data), "\n") {

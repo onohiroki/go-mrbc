@@ -79,7 +79,7 @@ go-mrbc/
 ├── internal/compiler/       IR → Irep
 ├── toolchain/               mruby / mrbc の探索（テスト用）
 ├── testdata/
-│   ├── conformance/         動作一致テスト（VM と共有可能）
+│   ├── conformance/         動作一致テスト（VM と共有する embedded corpus）
 │   ├── errors/              コンパイルエラーのテスト
 │   └── ...
 ├── docs/
@@ -310,7 +310,7 @@ noblock:1 req:5 opt:5 rest:1 post:5 key:5 kdict:1 block:1
 受け入れコマンドの例:
 
 ```sh
-gomrbc -o /tmp/basic.mrb testdata/conformance/basic/main.rb
+gomrbc -o /tmp/basic.mrb conformance/testdata/conformance/basic/main.rb
 RBENV_VERSION=mruby-4.0.0 mruby /tmp/basic.mrb
 ```
 
@@ -409,7 +409,7 @@ M1 完了時点で「手続き型＋ブロック＋配列/ハッシュ」のマ�
     と、代入先への直接コンパイルによる MOVE 削減
 - `mrbc` パッケージと `gomrbc` CLI
 - 差分実行テスト（デフォルト `mrbc` と mruby 4.0.0 をオラクルに使用）
-- 適合コーパス `testdata/conformance/`
+- 適合コーパス `conformance/testdata/conformance/`
 - コンパイル一致ハーネス `cmd/compat`（mruby の `test/` と `mrbgems/` を走査）
   - mruby 4.0.0 タグ: 153 ファイル中、両方成功 153（ギャップ 0）
   - 開発ツリー（`4.0.0-3011-gdbab56510`）: 237 ファイル中、
@@ -418,6 +418,9 @@ M1 完了時点で「手続き型＋ブロック＋配列/ハッシュ」のマ�
   - mruby 4.0.0 タグ: 実行可能 106 ファイル中、一致 106（デフォルト `mrbc`）
   - 開発ツリー（`4.0.0-3011-gdbab56510`）: 実行可能 160 ファイル中、
     一致 155、出力差 2、参照コンパイル不可 1、両方コンパイル不可 2
+  - 共有 conformance は NaN の自己等価を表明しない。参照 4.0.0 の
+    `OP_EQ` は NaN 同士を `true` にするが、開発ツリーと CRuby は `false`
+    であり、go-mrbvm は後者に従う
   - 残る出力差 2 は参照 `mrbc` 4.0.0 バイナリ側の既知の不具合で、
     go-mrbc は CRuby と一致する（開発ツリーでは修正済み）
     - `literals.rb` の #2557: 参照は `q + -5` を `SUBI 5` に畳み、

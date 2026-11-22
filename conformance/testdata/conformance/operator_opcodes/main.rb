@@ -43,10 +43,12 @@ puts nil == false
 puts true == true
 puts false == false
 
-nan = 0.0 / 0.0
-puts nan == nan
-puts nan < 1.0
-puts 1.0 > nan
+# NaN self-equality differs between mruby 4.0.0 and CRuby, so the shared
+# corpus does not assert it. See docs/compatibility-report.md.
+inf = 1.0 / 0.0
+puts inf == inf
+puts inf < 0.0
+puts 0.0 < inf
 
 box = Box.new(10)
 puts (box + 5).value

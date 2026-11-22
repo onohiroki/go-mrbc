@@ -120,6 +120,10 @@ difference is found.
 - The error-compatibility test compares exit status and the presence of a
   located diagnostic, not the exact wording: Prism and mruby's parser produce
   different messages.
+- The reference 4.0.0 VM answers `Float::NAN == Float::NAN` with `true`
+  because its `OP_EQ` identity shortcut runs before the NaN check. The
+  development tree and CRuby answer `false`; go-mrbvm follows them. Shared
+  conformance cases therefore avoid asserting NaN self-equality.
 - `TestRandomizedDifferential` generates programs within the supported subset
   and compares both compiled binaries at runtime. It covers arithmetic
   (including bitwise and shift operators), floats, strings, arrays, hashes,
