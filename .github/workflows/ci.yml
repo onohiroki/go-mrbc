@@ -29,6 +29,8 @@ jobs:
         run: echo "$GITHUB_WORKSPACE/mruby/build/host/bin" >> "$GITHUB_PATH"
 
       - name: Vet and test
+        env:
+          GOMRBC_FUZZ_ITERATIONS: "200"
         run: |
           go vet ./...
           go test ./...
