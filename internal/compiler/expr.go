@@ -1457,6 +1457,31 @@ func (c *Compiler) compileCallPrepared(s *scope, e *frontend.Call, dst, preRecei
 			c.compileExpr(s, e.Receiver, base)
 		}
 	}
+	// A builtin one-argument operator can use the dedicated arithmetic
+	// opcode. The VM falls back to a regular method call for non-integer
+	// receivers and redefined operators, so no type check is needed here.
+	if arith, ok := arithOpcode(e.Name); ok &&
+		!e.ImplicitSelf() && !packedArgs && !hasBlock &&
+		len(e.Keywords) == 0 && n == 1 && base <= math.MaxUint8 {
+		if arith == bytecode.OpADD || arith == bytecode.OpSUB {
+			if lit, ok := integerLiteral(e.Args[0]); ok &&
+				lit >= 0 && lit <= math.MaxUint8 {
+				imm := bytecode.OpADDI
+				if arith == bytecode.OpSUB {
+					imm = bytecode.OpSUBI
+				}
+				// The argument is a side-effect-free literal, so the
+				// immediate form does not need to load it at all.
+				s.emit(imm, uint32(base), uint32(lit))
+				s.emitMove(dst, base)
+				return
+			}
+		}
+		c.compileExpr(s, e.Args[0], base+1)
+		s.emit(arith, uint32(base))
+		s.emitMove(dst, base)
+		return
+	}
 	if packedArgs {
 		c.buildArgArray(s, e.Args, base+1)
 	} else {
@@ -1476,17 +1501,6 @@ func (c *Compiler) compileCallPrepared(s *scope, e *frontend.Call, dst, preRecei
 	if hasBlock {
 		blockReg := keywordBase + keywordRegs
 		c.compileBlockOperand(s, blockIndex, e.BlockArg, blockReg)
-	}
-
-	// A builtin one-argument operator can use the dedicated arithmetic
-	// opcode. The VM falls back to a regular method call for non-integer
-	// receivers and redefined operators, so no type check is needed here.
-	if arith, ok := arithOpcode(e.Name); ok &&
-		!e.ImplicitSelf() && !packedArgs && !hasBlock &&
-		len(e.Keywords) == 0 && n == 1 && base <= math.MaxUint8 {
-		s.emit(arith, uint32(base))
-		s.emitMove(dst, base)
-		return
 	}
 
 	positionalInfo := uint32(n)
@@ -1520,6 +1534,15 @@ func (c *Compiler) compileCallPrepared(s *scope, e *frontend.Call, dst, preRecei
 		return
 	}
 	s.emitMove(dst, base)
+}
+
+// integerLiteral returns the value of expr when it is an integer literal.
+func integerLiteral(expr frontend.Expr) (int64, bool) {
+	lit, ok := expr.(*frontend.IntegerLiteral)
+	if !ok {
+		return 0, false
+	}
+	return lit.Value, true
 }
 
 // arithOpcode returns the dedicated opcode for a builtin one-argument

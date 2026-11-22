@@ -85,6 +85,59 @@ func TestOperatorOpcodes(t *testing.T) {
 	}
 }
 
+func TestIntegerImmediateOpcodes(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want bytecode.Opcode
+		imm  uint32
+	}{
+		{"add one", "x = 5\nx + 1\n", bytecode.OpADDI, 1},
+		{"add zero", "x = 5\nx + 0\n", bytecode.OpADDI, 0},
+		{"add max", "x = 5\nx + 255\n", bytecode.OpADDI, 255},
+		{"sub two", "x = 5\nx - 2\n", bytecode.OpSUBI, 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			instructions := compileInstructions(t, tt.src)
+			for _, in := range instructions {
+				if in.Op == tt.want {
+					if len(in.Operands) != 2 || in.Operands[1] != tt.imm {
+						t.Fatalf("%s operands = %v, want immediate %d:\n%s",
+							tt.want, in.Operands, tt.imm, disassemble(t, tt.src))
+					}
+					return
+				}
+			}
+			t.Fatalf("bytecode does not contain %s:\n%s", tt.want, disassemble(t, tt.src))
+		})
+	}
+}
+
+func TestIntegerImmediateOutOfRangeStaysArithmetic(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want bytecode.Opcode
+	}{
+		{"negative addend", "x = 5\nx + -1\n", bytecode.OpADD},
+		{"negative subtrahend", "x = 5\nx - -1\n", bytecode.OpSUB},
+		{"too large addend", "x = 5\nx + 256\n", bytecode.OpADD},
+		{"too large subtrahend", "x = 5\nx - 256\n", bytecode.OpSUB},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			instructions := compileInstructions(t, tt.src)
+			if hasOpcode(instructions, bytecode.OpADDI) || hasOpcode(instructions, bytecode.OpSUBI) {
+				t.Fatalf("out-of-range literal was folded:\n%s", disassemble(t, tt.src))
+			}
+			if !hasOpcode(instructions, tt.want) {
+				t.Fatalf("bytecode does not contain %s:\n%s", tt.want, disassemble(t, tt.src))
+			}
+		})
+	}
+}
+
 func disassemble(t *testing.T, src string) string {
 	t.Helper()
 	irep, err := mrbc.Compile(context.Background(), []byte(src), mrbc.Options{FilePath: "ops.rb"})
