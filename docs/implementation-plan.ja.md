@@ -26,7 +26,7 @@
 | CLI | `gomrbc` |
 | VM | pure Go 実装は別プロジェクト。`bytecode` パッケージと適合コーパスを共有 |
 | 未対応構文 | 必ず位置付きのコンパイルエラーにする（暗黙に無視しない） |
-| 最適化 | 初期実装では行わない。演算子もまず `SEND` で出力する |
+| 最適化 | 初期実装では行わない。演算子もまず `SEND` で出力する（M4 で専用 opcode に移行済み） |
 
 ## 3. 全体アーキテクチャ
 
@@ -173,15 +173,17 @@ noblock:1 req:5 opt:5 rest:1 post:5 key:5 kdict:1 block:1
 - `BLKPUSH` の `lv` は、ネストしたブロックから外側メソッドのブロックを
   参照する場合に必要になる。M2 で対応する。
 
-### 6.3 演算子はまず SEND
+### 6.3 演算子 opcode
 
-- `+`、`-`、`*`、`/`、`==`、`<`、`[]`、`!`、単項 `-` などは `SEND` で出す。
-  - 例: `a + b` → `SEND R[a] :+ n=1`
-  - mruby の `OP_ADD` などは最適化用であり、意味的にはメソッド呼び出しでよい。
-- `&&` / `||` / `!` の短絡評価と真偽値判定だけは制御フローで実装する。
-- 後から `ADD` / `ADDI` / `EQ` / `LT` などを追加できる。
-- これにより、算術系 opcode の実装と検証を初期から切り離せる。
-- 性能差の主要因になっているため、追加手順は
+- 初期実装では `+`、`-`、`*`、`/`、`==`、`<` などを `SEND` で出力していたが、
+  現在は公式 `mrbc` と同じ専用 opcode を出力する。
+  - `a + b` → `OP_ADD`、`a + 1` → `OP_ADDI`
+  - `a < b` → `OP_LT`、`a[i]` → `OP_GETIDX`
+  - ローカル `x += 1` → `OP_ADDILV`
+- 非整数レシーバや演算子再定義時は VM が `SEND` にフォールバックするため、
+  コンパイラ側の型判定は不要。
+- `&&` / `||` / `!` の短絡評価と真偽値判定は制御フローで実装する。
+- 条件・実装手順・実測結果は
   [operator-opcodes.ja.md](operator-opcodes.ja.md) にまとめている。
 
 ### 6.4 SEND のエンコーディング
@@ -274,7 +276,7 @@ noblock:1 req:5 opt:5 rest:1 post:5 key:5 kdict:1 block:1
 | M1 | `MOVE`, `LOADNIL/TRUE/FALSE/SELF`, `LOADI_0..7`, `LOADI8/16/32`, `LOADINEG`, `LOADI__1`, `LOADL`, `LOADSYM`, `STRING`, `SYMBOL`, `GETGV/SETGV`, `GETCONST`, `GETUPVAR/SETUPVAR`, `JMP/JMPIF/JMPNOT/JMPNIL`, `SEND/SENDB/SSEND/SSENDB`, `ENTER`, `RETURN`, `BLOCK`, `ARRAY/ARRAY2`, `HASH`, `RANGE_INC/RANGE_EXC`, `STRCAT`, `GETIDX/SETIDX`, `BLKPUSH/BLKCALL`, `STOP`, `EXT1/2/3` |
 | M2 | `CLASS/MODULE/EXEC/OCLASS/TCLASS`, `TDEF/SDEF/DEF`, `GETIV/SETIV`, `GETCV/SETCV`, `SETCONST/GETMCNST/SETMCNST`, `SUPER`, `ARGARY`, `KARG/KEY_P/KEYEND`, `LAMBDA`, `BREAK`, `RETURN_BLK`, `ARYPUSH/ARYCAT/ARYSPLAT/APOST`, `HASHADD/HASHCAT` |
 | M3 | `EXCEPT/RESCUE/RAISEIF`, `JMPUW`, catch handler table, `SCLASS`, `ALIAS/UNDEF` |
-| M4 | `MATCHERR`、最適化 opcode（`ADD` / `ADDI` / `SUB` / `EQ` / `LT` など、`SEND0` / `SSEND0`、短縮 `LOADI`） |
+| M4 | `MATCHERR`、最適化 opcode（`ADD` / `ADDI` / `SUB` / `EQ` / `LT` など、`SEND0` / `SSEND0`、短縮 `LOADI`）。演算子系と `SEND0` / `SSEND0`、`GETIDX` / `SETIDX` は実装済み |
 
 最適化 opcode の実装計画は [operator-opcodes.ja.md](operator-opcodes.ja.md) を参照。
 
@@ -401,6 +403,10 @@ M1 完了時点で「手続き型＋ブロック＋配列/ハッシュ」のマ�
   ローカル捕捉を含む）
   - 正規表現リテラル（`Regexp.compile` 呼び出しに変換。実行には
     ターゲット VM の `mruby-regexp` が必要）
+  - 演算子・インデックスの専用 opcode（`ADD` / `ADDI` / `ADDILV` /
+    `SUB` / `SUBI` / `SUBILV` / `MUL` / `DIV` / `EQ` / `LT` / `LE` /
+    `GT` / `GE` / `GETIDX` / `GETIDX0` / `SETIDX` / `SEND0` / `SSEND0`）
+    と、代入先への直接コンパイルによる MOVE 削減
 - `mrbc` パッケージと `gomrbc` CLI
 - 差分実行テスト（デフォルト `mrbc` と mruby 4.0.0 をオラクルに使用）
 - 適合コーパス `testdata/conformance/`
@@ -450,7 +456,7 @@ M1 完了時点で「手続き型＋ブロック＋配列/ハッシュ」のマ�
 
 ### 次の作業
 
-1. M4: 最適化 opcode、性能（デフォルト `mrbc` との差をさらに減らす場合）
+1. M4: 残りの最適化（MOVE のバイト列 peephole、`ARRAY2` など）
 2. ランダム差分テストの生成器拡張と CI での反復回数増加
 
 M0.5 は M0 と独立しているため、並行して進めてもよい。
