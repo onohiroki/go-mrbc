@@ -1478,6 +1478,17 @@ func (c *Compiler) compileCallPrepared(s *scope, e *frontend.Call, dst, preRecei
 		c.compileBlockOperand(s, blockIndex, e.BlockArg, blockReg)
 	}
 
+	// A builtin one-argument operator can use the dedicated arithmetic
+	// opcode. The VM falls back to a regular method call for non-integer
+	// receivers and redefined operators, so no type check is needed here.
+	if arith, ok := arithOpcode(e.Name); ok &&
+		!e.ImplicitSelf() && !packedArgs && !hasBlock &&
+		len(e.Keywords) == 0 && n == 1 && base <= math.MaxUint8 {
+		s.emit(arith, uint32(base))
+		s.emitMove(dst, base)
+		return
+	}
+
 	positionalInfo := uint32(n)
 	if packedArgs {
 		positionalInfo = 15
@@ -1509,6 +1520,33 @@ func (c *Compiler) compileCallPrepared(s *scope, e *frontend.Call, dst, preRecei
 		return
 	}
 	s.emitMove(dst, base)
+}
+
+// arithOpcode returns the dedicated opcode for a builtin one-argument
+// operator. The opcode takes the receiver in R[a] and the argument in R[a+1],
+// matching the register layout of a SEND call.
+func arithOpcode(name string) (bytecode.Opcode, bool) {
+	switch name {
+	case "+":
+		return bytecode.OpADD, true
+	case "-":
+		return bytecode.OpSUB, true
+	case "*":
+		return bytecode.OpMUL, true
+	case "/":
+		return bytecode.OpDIV, true
+	case "==":
+		return bytecode.OpEQ, true
+	case "<":
+		return bytecode.OpLT, true
+	case "<=":
+		return bytecode.OpLE, true
+	case ">":
+		return bytecode.OpGT, true
+	case ">=":
+		return bytecode.OpGE, true
+	}
+	return 0, false
 }
 
 // isSetterName reports whether name is an attribute writer such as `foo=`.
