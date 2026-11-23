@@ -65,7 +65,9 @@ func (c *Compiler) compileExpr(s *scope, expr frontend.Expr, dst int) {
 		c.compileLocalWrite(s, e, dst, true)
 
 	case *frontend.GlobalRead:
-		s.emit(bytecode.OpGETGV, uint32(dst), s.sym(e.Name))
+		if !c.compileRegexpGlobalRead(s, e.Name, dst) {
+			s.emit(bytecode.OpGETGV, uint32(dst), s.sym(e.Name))
+		}
 	case *frontend.GlobalWrite:
 		value := s.alloc(1)
 		c.compileExpr(s, e.Value, value)
@@ -304,6 +306,61 @@ func (c *Compiler) compileExpr(s *scope, expr frontend.Expr, dst int) {
 	default:
 		c.failExpr(expr, "compiler: unsupported IR node %T", expr)
 	}
+}
+
+// compileRegexpGlobalRead compiles the match names that read $~ into the
+// private calls mruby's code generator uses, so that $1 and $& follow a
+// reassigned $~ and read whatever the MatchData answers to __group and the
+// like. It answers false for every other global variable.
+func (c *Compiler) compileRegexpGlobalRead(s *scope, name string, dst int) bool {
+	method := ""
+	index := -1
+	switch name {
+	case "$&":
+		method, index = "__group", 0
+	case "$`":
+		method = "__pre_match"
+	case "$'":
+		method = "__post_match"
+	case "$+":
+		method = "__last_group"
+	default:
+		if len(name) < 2 || name[0] != '$' || name[1] == '0' {
+			return false
+		}
+		value := 0
+		for i := 1; i < len(name); i++ {
+			if name[i] < '0' || name[i] > '9' {
+				return false
+			}
+			value = value*10 + int(name[i]-'0')
+			if value > 1<<20 {
+				return false
+			}
+		}
+		method, index = "__group", value
+	}
+	lastMatch := s.alloc(1)
+	s.emit(bytecode.OpGETGV, uint32(lastMatch), s.sym("$~"))
+	noMatch := s.asm.newLabel()
+	done := s.asm.newLabel()
+	s.asm.jmpIf(bytecode.OpJMPNIL, lastMatch, noMatch)
+	argc := 0
+	if index >= 0 {
+		argc = 1
+	}
+	base := s.alloc(1 + argc)
+	s.emitMove(base, lastMatch)
+	if index >= 0 {
+		c.compileInteger(s, base+1, int64(index))
+	}
+	s.emit(bytecode.OpSEND, uint32(base), s.sym(method), uint32(argc))
+	s.emitMove(dst, base)
+	s.asm.jmp(done)
+	s.asm.bind(noMatch)
+	s.emit(bytecode.OpLOADNIL, uint32(dst))
+	s.asm.bind(done)
+	return true
 }
 
 func (c *Compiler) compileInteger(s *scope, dst int, value int64) {
