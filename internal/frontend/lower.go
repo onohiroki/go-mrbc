@@ -13,6 +13,12 @@ import (
 
 // Lower parses src with Prism and lowers it to the internal IR.
 func Lower(ctx context.Context, src []byte, filename string) (*Program, error) {
+	return LowerWithLineOffset(ctx, src, filename, 0)
+}
+
+// LowerWithLineOffset parses src and shifts every reported line by offset.
+// Evaluated source uses it to start at the line number its caller passed.
+func LowerWithLineOffset(ctx context.Context, src []byte, filename string, offset int) (*Program, error) {
 	p, err := parser.NewParser(ctx,
 		parser.WithFilePath(filename),
 		parser.WithMainScript(true),
@@ -22,11 +28,10 @@ func Lower(ctx context.Context, src []byte, filename string) (*Program, error) {
 		return nil, fmt.Errorf("create parser: %w", err)
 	}
 	defer p.Close(ctx)
-	return LowerWithParser(ctx, p, src, filename)
+	return lowerWithParserOffset(ctx, p, src, filename, offset)
 }
 
-// LowerWithParser parses src using an existing parser.
-func LowerWithParser(ctx context.Context, p *parser.Parser, src []byte, filename string) (*Program, error) {
+func lowerWithParserOffset(ctx context.Context, p *parser.Parser, src []byte, filename string, lineOffset int) (*Program, error) {
 	source := NewSource(filename, append([]byte(nil), src...))
 	var result *parser.ParseResult
 	for {
@@ -72,7 +77,7 @@ func LowerWithParser(ctx context.Context, p *parser.Parser, src []byte, filename
 		return nil, &Error{File: filename, Position: Position{Line: 1, Column: 1}, Message: "empty parse result"}
 	}
 
-	l := &lowerer{source: source}
+	l := &lowerer{lineOffset: lineOffset, source: source}
 	body, err := l.lowerStatements(result.Value.Statements)
 	if err != nil {
 		return nil, err
@@ -112,14 +117,17 @@ func DumpAST(ctx context.Context, src []byte, filename string) ([]byte, error) {
 }
 
 type lowerer struct {
-	source *Source
+	lineOffset int
+	source     *Source
 }
 
 func (l *lowerer) pos(node parser.Node) Position {
 	if node == nil {
 		return Position{Line: 1, Column: 1}
 	}
-	return l.source.Position(node.GetLocation().StartOffset)
+	pos := l.source.Position(node.GetLocation().StartOffset)
+	pos.Line += l.lineOffset
+	return pos
 }
 
 func (l *lowerer) errorf(node parser.Node, format string, args ...any) error {

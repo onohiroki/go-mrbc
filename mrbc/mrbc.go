@@ -28,6 +28,12 @@ type Options struct {
 	// NoOptimize is accepted for mrbc compatibility. Optimization is not
 	// implemented yet, so this is currently the only behavior.
 	NoOptimize bool
+	// LocalNames declares extra local variables for the top-level scope. It
+	// lets an evaluator compile source against the caller's locals.
+	LocalNames []string
+	// LineOffset shifts every reported line number. Evaluated source starts
+	// at the line its caller passed instead of line 1.
+	LineOffset int
 }
 
 // Compile parses and compiles src into an irep.
@@ -36,11 +42,11 @@ func Compile(ctx context.Context, src []byte, opts Options) (*bytecode.Irep, err
 	if file == "" {
 		file = "<string>"
 	}
-	program, err := frontend.Lower(ctx, src, file)
+	program, err := frontend.LowerWithLineOffset(ctx, src, file, opts.LineOffset)
 	if err != nil {
 		return nil, err
 	}
-	return compiler.Compile(program, file, src)
+	return compiler.CompileWithLocals(program, file, src, opts.LocalNames)
 }
 
 // CompileFile reads path, compiles it, and returns a RITE binary.

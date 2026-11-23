@@ -16,8 +16,34 @@ type Compiler struct {
 
 // Compile compiles a lowered program into a top-level irep.
 func Compile(program *frontend.Program, file string, src []byte) (*bytecode.Irep, error) {
+	return CompileWithLocals(program, file, src, nil)
+}
+
+// CompileWithLocals compiles a lowered program with extra local variable names
+// visible at the top level. Evaluated source uses it to bind the locals of the
+// scope that called eval.
+func CompileWithLocals(program *frontend.Program, file string, src []byte, extraLocals []string) (*bytecode.Irep, error) {
 	if program == nil {
 		return nil, fmt.Errorf("compiler: nil program")
+	}
+	if len(extraLocals) > 0 {
+		merged := make([]string, 0, len(extraLocals)+len(program.Locals))
+		seen := make(map[string]bool, len(extraLocals)+len(program.Locals))
+		for _, name := range extraLocals {
+			if name == "" || seen[name] {
+				continue
+			}
+			seen[name] = true
+			merged = append(merged, name)
+		}
+		for _, name := range program.Locals {
+			if name == "" || seen[name] {
+				continue
+			}
+			seen[name] = true
+			merged = append(merged, name)
+		}
+		program.Locals = merged
 	}
 	c := &Compiler{source: frontend.NewSource(file, src)}
 	top := c.compileTop(program)
