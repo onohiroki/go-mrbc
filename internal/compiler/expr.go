@@ -229,8 +229,9 @@ func (c *Compiler) compileExpr(s *scope, expr frontend.Expr, dst int) {
 		s.emitMove(dst, value)
 
 	case *frontend.ReturnExpr:
+		leavesCaller := s.kind == scopeBlock || (c.eval && s.kind == scopeTop && c.evalInMethod)
 		if e.Value == nil {
-			if s.kind == scopeBlock {
+			if leavesCaller {
 				value := s.alloc(1)
 				s.emit(bytecode.OpLOADNIL, uint32(value))
 				s.emit(bytecode.OpRETURN_BLK, uint32(value))
@@ -241,7 +242,7 @@ func (c *Compiler) compileExpr(s *scope, expr frontend.Expr, dst int) {
 		}
 		value := s.alloc(1)
 		c.compileExpr(s, e.Value, value)
-		if s.kind == scopeBlock {
+		if leavesCaller {
 			s.emit(bytecode.OpRETURN_BLK, uint32(value))
 		} else {
 			s.emit(bytecode.OpRETURN, uint32(value))
@@ -1987,8 +1988,26 @@ func (c *Compiler) compileSuper(s *scope, e *frontend.SuperExpr, dst int) {
 		c.failExpr(e, "super is not available here")
 		return
 	}
+	if e.Forwarding && s.yieldLevel > 15 {
+		c.failExpr(e, "block level too deep for super")
+		return
+	}
+	if info != nil && e.Forwarding && uint32(info.ainfo)<<4 > 0xffff {
+		c.failExpr(e, "too many parameters to forward")
+		return
+	}
 
 	if e.Forwarding {
+		if info == nil && c.eval {
+			// The VM takes the arguments, keywords and block from the frame
+			// the evaluated source was called from.
+			base := s.alloc(2)
+			s.emit(bytecode.OpLOADNIL, uint32(base))
+			s.emit(bytecode.OpLOADNIL, uint32(base+1))
+			s.emit(bytecode.OpSUPER, uint32(base), 0x100)
+			s.emitMove(dst, base)
+			return
+		}
 		if info == nil {
 			// A top-level block has no method to forward to. mruby still
 			// compiles `super`, and the VM raises NoMethodError at runtime.
@@ -2131,9 +2150,29 @@ func (c *Compiler) compileSuper(s *scope, e *frontend.SuperExpr, dst int) {
 }
 
 func (c *Compiler) compileYield(s *scope, e *frontend.YieldExpr, dst int) {
-	if s.method == nil || s.method.methodInfo == nil || s.yieldLevel < 0 {
+	evaluated := c.eval && s.method == nil && s.yieldLevel >= 0 && c.evalInMethod
+	if s.method == nil || s.method.methodInfo == nil {
+		if !evaluated {
+			c.failExpr(e, "yield outside a method is not supported")
+			return
+		}
+	} else if s.yieldLevel < 0 {
 		c.failExpr(e, "yield outside a method is not supported")
 		return
+	}
+	if s.yieldLevel > 15 {
+		c.failExpr(e, "block level too deep for yield")
+		return
+	}
+	if c.eval {
+		var info *methodInfo
+		if s.method != nil {
+			info = s.method.methodInfo
+		}
+		if info != nil && uint32(info.ainfo)<<4 > 0xffff {
+			c.failExpr(e, "too many parameters to forward")
+			return
+		}
 	}
 	hasSplat := false
 	for _, arg := range e.Args {
@@ -2182,8 +2221,11 @@ func (c *Compiler) compileYield(s *scope, e *frontend.YieldExpr, dst int) {
 		}
 	}
 
-	info := s.method.methodInfo
-	aspec := uint32(((info.ainfo << 4) | s.yieldLevel) & 0xffff)
+	ainfo := 0
+	if s.method != nil && s.method.methodInfo != nil {
+		ainfo = s.method.methodInfo.ainfo
+	}
+	aspec := uint32(((ainfo << 4) | s.yieldLevel) & 0xffff)
 	s.emit(bytecode.OpBLKPUSH, uint32(base), aspec)
 	if packedArgs || len(e.Keywords) > 0 {
 		positionalInfo := uint32(n)

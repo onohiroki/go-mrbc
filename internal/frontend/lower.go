@@ -19,9 +19,21 @@ func Lower(ctx context.Context, src []byte, filename string) (*Program, error) {
 // LowerWithLineOffset parses src and shifts every reported line by offset.
 // Evaluated source uses it to start at the line number its caller passed.
 func LowerWithLineOffset(ctx context.Context, src []byte, filename string, offset int) (*Program, error) {
+	return lowerWithOptions(ctx, src, filename, offset, false)
+}
+
+// LowerEvalWithLineOffset parses evaluated source. A partial script allows
+// the yield, super and return forms that only make sense in the scope the
+// string is evaluated in.
+func LowerEvalWithLineOffset(ctx context.Context, src []byte, filename string, offset int) (*Program, error) {
+	return lowerWithOptions(ctx, src, filename, offset, true)
+}
+
+func lowerWithOptions(ctx context.Context, src []byte, filename string, offset int, partial bool) (*Program, error) {
 	p, err := parser.NewParser(ctx,
 		parser.WithFilePath(filename),
 		parser.WithMainScript(true),
+		parser.WithPartialScript(partial),
 		parser.WithEncoding("UTF-8"),
 	)
 	if err != nil {

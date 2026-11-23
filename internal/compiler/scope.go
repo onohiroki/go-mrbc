@@ -112,6 +112,10 @@ func (c *Compiler) newScope(parent *scope, kind scopeKind, params []frontend.Par
 			s.yieldLevel = -1
 		case parent.kind == scopeMethod:
 			s.yieldLevel = 1
+		case c.eval && parent.kind == scopeTop && parent.yieldLevel >= 0:
+			// Evaluated source has no method scope of its own; the caller's
+			// frame stands in for it.
+			s.yieldLevel = parent.yieldLevel + 1
 		case (parent.kind == scopeBlock || parent.kind == scopeLambda) && parent.yieldLevel >= 0:
 			s.yieldLevel = parent.yieldLevel + 1
 		default:

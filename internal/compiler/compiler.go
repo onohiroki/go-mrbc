@@ -9,9 +9,22 @@ import (
 
 // Compiler lowers the internal IR to mruby 4.0.0 bytecode.
 type Compiler struct {
-	source     *frontend.Source
-	err        error
-	forCounter int
+	source       *frontend.Source
+	err          error
+	forCounter   int
+	eval         bool
+	evalInMethod bool
+}
+
+// Options configures compilation beyond the parsed program.
+type Options struct {
+	// ExtraLocals declares locals visible at the top level.
+	ExtraLocals []string
+	// Eval compiles evaluated source, where a top-level return leaves the
+	// caller and a forwarding super names the caller's frame.
+	Eval bool
+	// EvalInMethod says the source runs inside a method, so it may yield.
+	EvalInMethod bool
 }
 
 // Compile compiles a lowered program into a top-level irep.
@@ -23,13 +36,18 @@ func Compile(program *frontend.Program, file string, src []byte) (*bytecode.Irep
 // visible at the top level. Evaluated source uses it to bind the locals of the
 // scope that called eval.
 func CompileWithLocals(program *frontend.Program, file string, src []byte, extraLocals []string) (*bytecode.Irep, error) {
+	return CompileWithOptions(program, file, src, Options{ExtraLocals: extraLocals})
+}
+
+// CompileWithOptions compiles a lowered program with evaluator settings.
+func CompileWithOptions(program *frontend.Program, file string, src []byte, opts Options) (*bytecode.Irep, error) {
 	if program == nil {
 		return nil, fmt.Errorf("compiler: nil program")
 	}
-	if len(extraLocals) > 0 {
-		merged := make([]string, 0, len(extraLocals)+len(program.Locals))
-		seen := make(map[string]bool, len(extraLocals)+len(program.Locals))
-		for _, name := range extraLocals {
+	if len(opts.ExtraLocals) > 0 {
+		merged := make([]string, 0, len(opts.ExtraLocals)+len(program.Locals))
+		seen := make(map[string]bool, len(opts.ExtraLocals)+len(program.Locals))
+		for _, name := range opts.ExtraLocals {
 			if name == "" || seen[name] {
 				continue
 			}
@@ -45,12 +63,47 @@ func CompileWithLocals(program *frontend.Program, file string, src []byte, extra
 		}
 		program.Locals = merged
 	}
-	c := &Compiler{source: frontend.NewSource(file, src)}
+	c := &Compiler{source: frontend.NewSource(file, src), eval: opts.Eval, evalInMethod: opts.EvalInMethod}
 	top := c.compileTop(program)
 	if c.err != nil {
 		return nil, c.err
 	}
+	if err := validateIrepLimits(top); err != nil {
+		return nil, err
+	}
 	return top, nil
+}
+
+// validateIrepLimits enforces the widths the RITE dump records. A name or a
+// string that does not fit would be truncated on the way into an irep.
+func validateIrepLimits(irep *bytecode.Irep) error {
+	if irep == nil {
+		return nil
+	}
+	if len(irep.Filename) > 0xfffe {
+		return fmt.Errorf("filename too long")
+	}
+	for _, name := range irep.LocalNames {
+		if len(name) > 0xfffe {
+			return fmt.Errorf("local variable name too long")
+		}
+	}
+	for _, name := range irep.Syms {
+		if len(name) > 0xfffe {
+			return fmt.Errorf("symbol length too long")
+		}
+	}
+	for _, entry := range irep.Pool {
+		if entry.Kind == bytecode.PoolString && len(entry.String) > 0xffff {
+			return fmt.Errorf("string literal too long")
+		}
+	}
+	for _, child := range irep.Reps {
+		if err := validateIrepLimits(child); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c *Compiler) fail(pos frontend.Position, format string, args ...any) {

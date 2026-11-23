@@ -34,6 +34,12 @@ type Options struct {
 	// LineOffset shifts every reported line number. Evaluated source starts
 	// at the line its caller passed instead of line 1.
 	LineOffset int
+	// Eval compiles evaluated source. A top-level return leaves the caller's
+	// method, a forwarding super carries the caller's argument layout, and a
+	// yield reads the caller's block.
+	Eval bool
+	// EvalInMethod says the evaluated source runs in a method and may yield.
+	EvalInMethod bool
 }
 
 // Compile parses and compiles src into an irep.
@@ -42,11 +48,21 @@ func Compile(ctx context.Context, src []byte, opts Options) (*bytecode.Irep, err
 	if file == "" {
 		file = "<string>"
 	}
-	program, err := frontend.LowerWithLineOffset(ctx, src, file, opts.LineOffset)
+	var program *frontend.Program
+	var err error
+	if opts.Eval {
+		program, err = frontend.LowerEvalWithLineOffset(ctx, src, file, opts.LineOffset)
+	} else {
+		program, err = frontend.LowerWithLineOffset(ctx, src, file, opts.LineOffset)
+	}
 	if err != nil {
 		return nil, err
 	}
-	return compiler.CompileWithLocals(program, file, src, opts.LocalNames)
+	return compiler.CompileWithOptions(program, file, src, compiler.Options{
+		ExtraLocals:  opts.LocalNames,
+		Eval:         opts.Eval,
+		EvalInMethod: opts.EvalInMethod,
+	})
 }
 
 // CompileFile reads path, compiles it, and returns a RITE binary.
