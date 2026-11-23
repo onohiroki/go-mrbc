@@ -1348,20 +1348,43 @@ func (c *Compiler) compileMatchWrite(s *scope, e *frontend.MatchWriteExpr, dst i
 	sp0 := s.sp
 	result := s.alloc(1)
 	c.compileExpr(s, e.Call, result)
+	// A failed match leaves $~ nil, and every name then binds nil without
+	// asking nil for the group. mruby's codegen jumps over the reads in
+	// that case; a read of nil[:name] would raise instead.
+	lastMatch := s.alloc(1)
+	s.emit(bytecode.OpGETGV, uint32(lastMatch), s.sym("$~"))
+	noMatch := s.asm.newLabel()
+	done := s.asm.newLabel()
+	s.asm.jmpIf(bytecode.OpJMPNIL, lastMatch, noMatch)
 	for _, target := range e.Targets {
 		if target.Kind != frontend.TargetLocal {
 			c.fail(target.Pos, "only local variables are supported as match-write targets")
 			return
 		}
 		base := s.alloc(2)
-		s.emit(bytecode.OpGETGV, uint32(base), s.sym("$~"))
+		s.emitMove(base, lastMatch)
 		s.emit(bytecode.OpLOADSYM, uint32(base+1), s.sym(target.Name))
 		s.emit(bytecode.OpSEND, uint32(base), s.sym("[]"), 1)
 		if !c.assignDirect(s, target, base) {
 			return
 		}
-		s.sp = sp0 + 1
+		s.sp = sp0 + 2
 	}
+	s.asm.jmp(done)
+	s.asm.bind(noMatch)
+	for _, target := range e.Targets {
+		if target.Kind != frontend.TargetLocal {
+			c.fail(target.Pos, "only local variables are supported as match-write targets")
+			return
+		}
+		empty := s.alloc(1)
+		s.emit(bytecode.OpLOADNIL, uint32(empty))
+		if !c.assignDirect(s, target, empty) {
+			return
+		}
+		s.sp = sp0 + 2
+	}
+	s.asm.bind(done)
 	s.emitMove(dst, result)
 	s.sp = sp0
 }
