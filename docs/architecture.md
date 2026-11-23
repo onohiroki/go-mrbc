@@ -3,6 +3,8 @@
 `go-mrbc` compiles Ruby source to mruby 4.0.0 bytecode. The compiler is written
 in Go; the parser is [Prism](https://github.com/ruby/prism) running as
 WebAssembly through [go-ruby-prism](https://github.com/danielgatis/go-ruby-prism).
+The runtime side is the separate `go-mrbvm` repository; see
+[ecosystem.md](ecosystem.md) for the shared bytecode contract and release order.
 
 ## Pipeline
 

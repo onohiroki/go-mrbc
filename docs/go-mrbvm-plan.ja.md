@@ -1,7 +1,10 @@
-# go-mrbvm 実装計画（概要）
+# go-mrbvm 実装計画（概要・履歴）
 
 英語の詳細版は [go-mrbvm-plan.md](go-mrbvm-plan.md) を参照。
-このファイルは日本語での要点整理である。
+このファイルは初期計画の要点整理であり、現在の実装状況ではない。
+最新の状況は `github.com/onohiroki/go-mrbvm` の README と roadmap を参照。
+リポジトリ間の契約とリリース手順は [ecosystem.md](ecosystem.md) と
+[releasing.md](releasing.md) にある。
 
 ## 目的
 

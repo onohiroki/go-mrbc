@@ -7,9 +7,26 @@ and produces **RITE 04.00** bytecode that runs on the official **mruby 4.0.0**
 virtual machine. Everything except the parser is implemented in pure Go.
 
 The long-term goal is to use mruby as an embedded macro language for tools
-written in Go. The pure-Go mruby VM is developed separately as
-[`go-mrbvm`](https://github.com/onohiroki/go-mrbvm); see the
-[go-mrbvm plan](docs/go-mrbvm-plan.md).
+written in Go. The runtime side is
+[`go-mrbvm`](https://github.com/onohiroki/go-mrbvm), a pure-Go VM for the same
+RITE 04.00 bytecode.
+
+## The two repositories
+
+```text
+Ruby source ──▶ go-mrbc ──▶ RITE 04.00 ──▶ go-mrbvm
+                                      └──▶ mruby 4.0.0 (reference)
+```
+
+- `go-mrbc` parses Ruby, lowers it, and writes bytecode. It has no dependency
+  on the VM.
+- `go-mrbvm` executes bytecode. It imports only `go-mrbc/bytecode`, the shared
+  RITE model and opcode codec.
+
+The conformance corpus lives here and is consumed by both projects. Release
+order, version pinning, and the shared contract are described in
+[docs/ecosystem.md](docs/ecosystem.md); tagging is described in
+[docs/releasing.md](docs/releasing.md).
 
 ## Status
 
@@ -58,8 +75,8 @@ known limitations.
   Prism parser, which is shipped as WebAssembly and runs without cgo.
 - Prioritize **behavioral compatibility** with `mrbc` over byte-for-byte
   identical output.
-- Keep the bytecode format and opcode definitions reusable by a future
-  pure-Go mruby VM.
+- Keep the bytecode format and opcode definitions reusable by the pure-Go
+  `go-mrbvm` runtime.
 
 ## Non-goals
 
@@ -79,6 +96,20 @@ The test suite looks for `mruby` and `mrbc` on `PATH`. With rbenv:
 
 ```sh
 export RBENV_VERSION=mruby-4.0.0
+```
+
+## Install
+
+The module is not yet tagged for `go install`. Build from a checkout for now:
+
+```sh
+go build -o gomrbc ./cmd/gomrbc
+```
+
+After the first tagged release:
+
+```sh
+go install github.com/onohiroki/go-mrbc/cmd/gomrbc@latest
 ```
 
 ## Build
@@ -148,6 +179,18 @@ if err != nil {
 binary, err := mrbc.Dump(irep)
 ```
 
+Evaluator implementations pass the caller's local names and enable evaluator
+semantics explicitly:
+
+```go
+irep, err := mrbc.Compile(ctx, source, mrbc.Options{
+    FilePath:     "(eval)",
+    LocalNames:   callerLocals,
+    Eval:         true,
+    EvalInMethod: true,
+})
+```
+
 The `bytecode` package contains the shared RITE format model, opcode
 definitions, and encoder/decoder. It is intentionally independent of the
 parser and compiler so that other tools, including a pure-Go VM, can import
@@ -165,13 +208,16 @@ Ruby source
     -> bytecode.Irep
     -> RITE writer
     -> .mrb
-    -> mruby 4.0.0 VM
+    -> go-mrbvm or mruby 4.0.0
 ```
 
 See [docs/architecture.md](docs/architecture.md) for details.
 
 ## Documentation
 
+- [Ecosystem and repository relationship](docs/ecosystem.md)
+- [Ecosystem and repository relationship (Japanese)](docs/ecosystem.ja.md)
+- [Releasing](docs/releasing.md)
 - [Architecture](docs/architecture.md)
 - [Bytecode format](docs/bytecode-format.md)
 - [Compatibility](docs/compatibility.md)
@@ -182,6 +228,7 @@ See [docs/architecture.md](docs/architecture.md) for details.
 - [go-mrbvm plan (Japanese)](docs/go-mrbvm-plan.ja.md)
 - [Third-party licenses](THIRD_PARTY_LICENSES.md)
 - [Implementation plan (Japanese)](docs/implementation-plan.ja.md)
+- [Contributing](CONTRIBUTING.md)
 
 ## Development
 

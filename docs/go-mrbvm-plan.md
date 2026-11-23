@@ -1,13 +1,14 @@
 # go-mrbvm: a pure-Go mruby VM
 
-Status: initial project plan (2026-11-20)
+Status: historical initial project plan (2026-11-20)
 
-This document is the starting point for **`go-mrbvm`**, a pure-Go
-implementation of the mruby 4.0.0 virtual machine. It is kept in the
-`go-mrbc` repository because the compiler and the VM share a bytecode
-contract, but the VM itself is a separate project and repository.
+This was the starting plan for **`go-mrbvm`**, a pure-Go implementation of the
+mruby 4.0.0 virtual machine. The implementation now lives in
+`github.com/onohiroki/go-mrbvm`; its README and roadmap are the maintained
+documents. This file records the original scope and is not a status report.
 
-New repository: `github.com/onohiroki/go-mrbvm`
+Current relationship and release model: [ecosystem.md](ecosystem.md) and
+[releasing.md](releasing.md).
 
 Related repositories:
 

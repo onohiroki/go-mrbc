@@ -15,7 +15,7 @@ import (
 const Version = "0.1.0"
 
 // Target describes the bytecode target.
-const Target = "mruby 4.0.0 (RITE 04.00)"
+const Target = "mruby 4.0.0 / RITE 04.00"
 
 // Options controls compilation.
 type Options struct {
