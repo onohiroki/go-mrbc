@@ -11,6 +11,29 @@ written in Go. The runtime side is
 [`go-mrbvm`](https://github.com/onohiroki/go-mrbvm), a pure-Go VM for the same
 RITE 04.00 bytecode.
 
+## Background
+
+I started this project after attending hadashiA's talk at RubyKaigi 2026,
+[mruby on C#: From VM Implementation to Game Scripting](https://rubykaigi.org/2026/presentations/hadashiA.html).
+The talk presents [ChibiRuby](https://github.com/hadashiA/ChibiRuby), a pure-C#
+mruby VM, and argues that running mruby without C compilation makes it much
+easier to embed in cross-platform applications. I came away with the conclusion
+that, when mruby is used as an application's macro language, it should be
+implemented in the language the application itself is written in. For a Go
+application, that means an mruby implementation in Go.
+
+I first built a pure-Go VM for RITE bytecode. It could run bytecode, but my
+intended use — macro scripts supplied as Ruby source — also needed a bytecode
+compiler. I discarded that VM and restarted from the compiler in this
+repository. The rebuilt VM is
+[`go-mrbvm`](https://github.com/onohiroki/go-mrbvm).
+
+A from-scratch compiler was feasible because
+[go-ruby-prism](https://github.com/danielgatis/go-ruby-prism) exposes the Prism
+parser to pure Go (Prism itself is embedded as WebAssembly), so mruby's parser
+did not have to be reimplemented. The implementation was written entirely with
+AI coding assistance.
+
 ## The two repositories
 
 ```text
@@ -244,6 +267,10 @@ Conformance tests require mruby 4.0.0 and `mrbc` on `PATH`; see
 [Testing](docs/testing.md). The corpus itself lives in
 `conformance/testdata/conformance/` and is embedded by the `conformance`
 package so that `go-mrbvm` runs the same cases.
+
+## Author
+
+Created and maintained by [onohiroki](https://github.com/onohiroki).
 
 ## License
 
