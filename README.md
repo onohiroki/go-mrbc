@@ -1,5 +1,7 @@
 # go-mrbc
 
+[![CI](https://github.com/onohiroki/go-mrbc/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/onohiroki/go-mrbc/actions/workflows/ci.yml)
+
 A from-scratch Go implementation of mruby's `mrbc` bytecode compiler.
 
 `go-mrbc` parses Ruby with [go-ruby-prism](https://github.com/danielgatis/go-ruby-prism)
