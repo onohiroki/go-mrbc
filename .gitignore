@@ -1,8 +1,8 @@
-mruby
-gomrbc
-compat
-runtimecompat
+/mruby/
+/gomrbc
+/compat
+/runtimecompat
 *.mrb
 *.test
-dist/
+/dist/
 .DS_Store
