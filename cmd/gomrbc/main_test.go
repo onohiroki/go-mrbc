@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/onohiroki/go-mrbc/mrbc"
 )
 
 func runCLI(t *testing.T, args ...string) (int, string, string) {
@@ -31,7 +33,7 @@ func TestVersionAndCopyright(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("exit code = %d, want 0 (stderr: %s)", code, stderr)
 		}
-		if !strings.Contains(stdout, "gomrbc 0.1.0") || !strings.Contains(stdout, "mruby 4.0.0") {
+		if !strings.Contains(stdout, "gomrbc "+mrbc.Version) || !strings.Contains(stdout, "mruby 4.0.0") {
 			t.Fatalf("version output = %q", stdout)
 		}
 		if stderr != "" {
@@ -190,7 +192,7 @@ func TestSyntaxCheckAndVerbose(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("exit code = %d (stderr: %s)", code, stderr)
 		}
-		if !strings.HasPrefix(stdout, "gomrbc 0.1.0") {
+		if !strings.HasPrefix(stdout, "gomrbc "+mrbc.Version) {
 			t.Fatalf("stdout = %q, want version first", stdout)
 		}
 		if !strings.Contains(stdout, "irep[0]") {
