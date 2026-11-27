@@ -130,6 +130,9 @@ func ReadBinary(data []byte) (*Irep, error) {
 			if top == nil {
 				return nil, fmt.Errorf("bytecode: no IREP section")
 			}
+			if err := Validate(top); err != nil {
+				return nil, err
+			}
 			return top, nil
 		default:
 			// Unknown optional sections are ignored.

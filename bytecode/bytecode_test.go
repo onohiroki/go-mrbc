@@ -216,7 +216,7 @@ func TestCatchHandlerRoundTrip(t *testing.T) {
 		Nregs:   1,
 		Code:    code,
 		Catch: []CatchHandler{
-			{Type: CatchRescue, Begin: 0, End: 2, Target: 2},
+			{Type: CatchRescue, Begin: 0, End: 1, Target: 0},
 		},
 	}
 	binary, err := DumpBinary(top)
