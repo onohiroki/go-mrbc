@@ -28,6 +28,9 @@ type Options struct {
 	// NoOptimize is accepted for mrbc compatibility. Optimization is not
 	// implemented yet, so this is currently the only behavior.
 	NoOptimize bool
+	// NoExtOps rejects bytecode that needs an OP_EXT prefix, matching mrbc's
+	// --no-ext-ops option.
+	NoExtOps bool
 	// LocalNames declares extra local variables for the top-level scope. It
 	// lets an evaluator compile source against the caller's locals.
 	LocalNames []string
@@ -62,6 +65,7 @@ func Compile(ctx context.Context, src []byte, opts Options) (*bytecode.Irep, err
 		ExtraLocals:  opts.LocalNames,
 		Eval:         opts.Eval,
 		EvalInMethod: opts.EvalInMethod,
+		NoExtOps:     opts.NoExtOps,
 	})
 }
 

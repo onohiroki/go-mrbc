@@ -2,8 +2,9 @@ package main
 
 import (
 	"context"
-	"flag"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,108 +16,123 @@ import (
 )
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
+	os.Exit(run(os.Args[0], os.Args[1:], os.Stdout, os.Stderr))
 }
 
-func run(args []string) error {
-	flags := flag.NewFlagSet("gomrbc", flag.ContinueOnError)
-	flags.SetOutput(os.Stderr)
+func run(prog string, args []string, stdout, stderr io.Writer) int {
+	opts, files, action, err := parseArgs(args)
+	if opts.printVersion {
+		printVersion(stdout)
+	}
+	for _, warning := range opts.warnings {
+		fmt.Fprintf(stderr, "%s: %s\n", prog, warning)
+	}
+	if err != nil {
+		if !errors.Is(err, errHelp) {
+			fmt.Fprintf(stderr, "%s: %v\n", prog, err)
+		}
+		usage(stdout, prog)
+		return 1
+	}
 
-	var (
-		output     string
-		checkOnly  bool
-		verbose    bool
-		dumpAST    bool
-		dumpIR     bool
-		showVer    bool
-		removeLV   bool
-		noOptimize bool
-		debugInfo  bool
-	)
-	flags.StringVar(&output, "o", "", "write bytecode to `file`")
-	flags.BoolVar(&checkOnly, "c", false, "check syntax only")
-	flags.BoolVar(&verbose, "v", false, "print the generated instruction sequence")
-	flags.BoolVar(&verbose, "verbose", false, "print the generated instruction sequence")
-	flags.BoolVar(&dumpAST, "dump-ast", false, "print the Prism AST as JSON")
-	flags.BoolVar(&dumpIR, "dump-ir", false, "print the lowered IR")
-	flags.BoolVar(&showVer, "version", false, "print version information")
-	flags.BoolVar(&removeLV, "remove-lv", false, "omit local variable information")
-	flags.BoolVar(&noOptimize, "no-optimize", false, "disable optimization (currently always on)")
-	flags.BoolVar(&debugInfo, "g", false, "emit debug information")
-	flags.BoolVar(&debugInfo, "debug", false, "emit debug information")
-	flags.Usage = func() {
-		fmt.Fprintf(flags.Output(), "Usage: gomrbc [options] file.rb\n\nOptions:\n")
-		flags.PrintDefaults()
+	switch action {
+	case actionVersion:
+		printVersion(stdout)
+		return 0
+	case actionCopyright:
+		printCopyright(stdout)
+		return 0
 	}
-	if err := flags.Parse(args); err != nil {
-		return err
+
+	if len(files) == 0 {
+		fmt.Fprintf(stderr, "%s: no program file given\n", prog)
+		return 1
 	}
-	if showVer {
-		fmt.Printf("gomrbc %s (%s)\n", mrbc.Version, mrbc.Target)
-		return nil
+	if len(files) > 1 {
+		fmt.Fprintf(stderr, "%s: multiple source files are not supported yet\n", prog)
+		return 1
 	}
-	if flags.NArg() != 1 {
-		flags.Usage()
-		return fmt.Errorf("gomrbc: expected exactly one source file")
-	}
-	path := flags.Arg(0)
+
+	path := files[0]
 	src, err := os.ReadFile(path)
 	if err != nil {
-		return err
+		fmt.Fprintf(stderr, "%s: %v\n", prog, err)
+		return 1
 	}
 	ctx := context.Background()
 
-	if dumpAST {
+	if opts.dumpAST {
 		data, err := frontend.DumpAST(ctx, src, path)
 		if err != nil {
-			return err
+			fmt.Fprintln(stderr, err)
+			return 1
 		}
-		fmt.Println(string(data))
-		return nil
+		fmt.Fprintln(stdout, string(data))
+		return 0
 	}
 
 	program, err := frontend.Lower(ctx, src, path)
 	if err != nil {
-		return err
+		fmt.Fprintln(stderr, err)
+		return 1
 	}
-	if dumpIR {
-		if err := frontend.Dump(os.Stdout, program); err != nil {
-			return err
+	if opts.dumpIR {
+		if err := frontend.Dump(stdout, program); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
 		}
-		return nil
+		return 0
 	}
 
-	irep, err := compiler.Compile(program, path, src)
+	irep, err := compiler.CompileWithOptions(program, path, src, compiler.Options{
+		NoExtOps: opts.noExtOps,
+	})
 	if err != nil {
-		return err
+		fmt.Fprintln(stderr, err)
+		return 1
 	}
-	if verbose {
-		if err := bytecode.Disassemble(os.Stdout, irep); err != nil {
-			return err
+	if opts.verbose {
+		if err := bytecode.Disassemble(stdout, irep); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
 		}
 	}
-	if checkOnly {
-		fmt.Printf("%s: Syntax OK\n", path)
-		return nil
+	if opts.checkOnly {
+		fmt.Fprintf(stdout, "%s:%s:Syntax OK\n", prog, path)
+		return 0
 	}
 
 	binary, err := bytecode.DumpBinaryWithOptions(irep, bytecode.DumpOptions{
-		DebugInfo: debugInfo,
-		RemoveLV:  removeLV,
+		DebugInfo: opts.debugInfo,
+		RemoveLV:  opts.removeLV,
 	})
 	if err != nil {
-		return err
+		fmt.Fprintln(stderr, err)
+		return 1
 	}
-	if output == "" {
+	output := opts.output
+	if !opts.outputSet {
 		base := strings.TrimSuffix(path, filepath.Ext(path))
 		output = base + ".mrb"
 	}
-	if err := os.WriteFile(output, binary, 0o644); err != nil {
-		return err
+	if output == "-" {
+		if _, err := stdout.Write(binary); err != nil {
+			fmt.Fprintf(stderr, "%s: cannot write output: %v\n", prog, err)
+			return 1
+		}
+		return 0
 	}
-	_ = noOptimize
-	return nil
+	if err := os.WriteFile(output, binary, 0o644); err != nil {
+		fmt.Fprintf(stderr, "%s: cannot open output file:(%s)\n", prog, output)
+		return 1
+	}
+	return 0
+}
+
+func printVersion(w io.Writer) {
+	fmt.Fprintf(w, "gomrbc %s (%s)\n", mrbc.Version, mrbc.Target)
+}
+
+func printCopyright(w io.Writer) {
+	fmt.Fprintln(w, "gomrbc - Copyright (c) 2026 onohiroki and go-mrbc contributors")
 }

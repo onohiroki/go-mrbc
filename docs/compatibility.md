@@ -231,6 +231,25 @@ the script compiles successfully. Users embedding the bytecode should define
 and document their runtime profile (core plus selected mrbgems) as part of
 their tool, not as part of this compiler.
 
+## CLI compatibility
+
+The `gomrbc` switches follow mruby 4.0's `mrbc` where the underlying feature
+exists:
+
+- `-c`, `-o<outfile>` (including the attached form and `-o -`), `-v`, and `-g`
+  behave like their `mrbc` counterparts.
+- `--verbose`, `--remove-lv`, `--no-ext-ops`, `--no-optimize`, `--version`,
+  `--copyright`, `-e`, `-E`, and `--` are accepted.
+- `--dump-ast`, `--dump-ir`, and `--debug` are gomrbc extensions.
+- `--no-ext-ops` reports the first instruction that would need `OP_EXT`, using
+  the same `file:line` wording as `mrbc`.
+- The default output replaces the source extension with `.mrb`. Unlike `mrbc`,
+  gomrbc does not misplace the output when the path has no extension; it
+  always appends `.mrb` to the source path.
+
+`-B`/`-S`/`-s` (C source output) and multiple input files are not supported
+yet.
+
 ## Versioning
 
 The compiler rejects or avoids features that require a different bytecode

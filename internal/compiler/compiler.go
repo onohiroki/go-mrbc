@@ -25,6 +25,9 @@ type Options struct {
 	Eval bool
 	// EvalInMethod says the source runs inside a method, so it may yield.
 	EvalInMethod bool
+	// NoExtOps rejects bytecode that needs an OP_EXT prefix. mruby's mrbc
+	// exposes the same restriction as --no-ext-ops.
+	NoExtOps bool
 }
 
 // Compile compiles a lowered program into a top-level irep.
@@ -71,7 +74,47 @@ func CompileWithOptions(program *frontend.Program, file string, src []byte, opts
 	if err := validateIrepLimits(top); err != nil {
 		return nil, err
 	}
+	if opts.NoExtOps {
+		if err := validateNoExtOps(top); err != nil {
+			return nil, err
+		}
+	}
 	return top, nil
+}
+
+// validateNoExtOps reports the first instruction that needs an OP_EXT prefix.
+// The error uses mrbc's wording and a file:line location without a column.
+func validateNoExtOps(irep *bytecode.Irep) error {
+	if irep == nil {
+		return nil
+	}
+	instructions, err := bytecode.Decode(irep.Code)
+	if err != nil {
+		return err
+	}
+	for _, in := range instructions {
+		if !in.IsExt() {
+			continue
+		}
+		line := int32(1)
+		for _, entry := range irep.Lines {
+			if entry.Offset > int32(in.Offset) {
+				break
+			}
+			line = entry.Line
+		}
+		file := irep.Filename
+		if file == "" {
+			file = "<string>"
+		}
+		return fmt.Errorf("%s:%d: need OP_EXTs instruction (currently OP_EXTs are prohibited)", file, line)
+	}
+	for _, child := range irep.Reps {
+		if err := validateNoExtOps(child); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // validateIrepLimits enforces the widths the RITE dump records. A name or a

@@ -3,6 +3,7 @@ package mrbc_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,6 +39,30 @@ func TestUnsupportedSyntax(t *testing.T) {
 				t.Fatalf("error has no file location: %q", err)
 			}
 		})
+	}
+}
+
+func TestNoExtOpsOption(t *testing.T) {
+	var src strings.Builder
+	for i := 0; i < 300; i++ {
+		fmt.Fprintf(&src, "puts %q\n", fmt.Sprintf("s%d", i))
+	}
+	_, err := mrbc.Compile(context.Background(), []byte(src.String()), mrbc.Options{
+		FilePath: "manypool.rb",
+		NoExtOps: true,
+	})
+	if err == nil {
+		t.Fatal("expected --no-ext-ops to reject OP_EXT")
+	}
+	if !strings.Contains(err.Error(), "manypool.rb:257:") ||
+		!strings.Contains(err.Error(), "need OP_EXTs instruction") {
+		t.Fatalf("error = %q", err)
+	}
+
+	if _, err := mrbc.Compile(context.Background(), []byte(src.String()), mrbc.Options{
+		FilePath: "manypool.rb",
+	}); err != nil {
+		t.Fatalf("compile without NoExtOps: %v", err)
 	}
 }
 

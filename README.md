@@ -173,17 +173,33 @@ end
 ## CLI
 
 ```
-gomrbc [options] file.rb
+gomrbc [switches] programfile...
 
-  -o FILE        write bytecode to FILE (default: <source>.mrb)
-  -c             check syntax only
-  -g, --debug    emit debug information (source lines)
-  -v, --verbose  print the generated instruction sequence
-  --dump-ast     print the Prism AST as JSON
-  --dump-ir      print the lowered intermediate representation
-  --remove-lv    omit local variable information
-  --version      print version information
+  -c           check syntax only
+  -o<outfile>  write bytecode to <outfile>; use - for stdout
+               (default: <source>.mrb)
+  -v           print the version, then turn on verbose mode
+  -g           emit debug information (source lines)
+  --verbose    print the generated instruction sequence
+  --remove-lv  omit local variable information
+  --no-ext-ops reject instructions that need an OP_EXT prefix
+  --no-optimize disable peephole optimization (currently a no-op)
+  --version    print version information
+  --copyright  print the copyright
 ```
+
+The switches follow mruby's `mrbc`, including the attached `-oFILE` form,
+`-o -`, the deprecated `-e`/`-E` forms, and `--` to end option parsing. These
+gomrbc extensions are also available:
+
+```
+  --dump-ast   print the Prism AST as JSON
+  --dump-ir    print the lowered intermediate representation
+  --debug      alias for -g
+```
+
+`-B`/`-S`/`-s` (C source output) and multiple input files are not implemented
+yet.
 
 ## Library
 
