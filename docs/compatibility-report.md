@@ -12,7 +12,7 @@ newer than the target release.
 
 ## Compile parity: mruby 4.0.0 tag
 
-- Date: 2026-11-20
+- Date: 2026-11-27 (re-verified for v0.1.0)
 - Target: mruby 4.0.0 (`831da26b9`)
 - Scope: all `*.rb` files under `test/` and `mrbgems/`
 - Files: 153
@@ -26,6 +26,7 @@ newer than the target release.
 
 ## Runtime parity: mruby 4.0.0 tag
 
+- Date: 2026-11-27 (re-verified for v0.1.0)
 - Scope: test files under `test/t/` and `mrbgems/*/test/`
 - Runnable files: 106
 - Harness: `cmd/runtimecompat` with `-assert <4.0.0>/test/assert.rb`

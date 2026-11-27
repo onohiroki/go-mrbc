@@ -77,6 +77,15 @@ Changes to the bytecode format or opcode semantics belong in both
 repositories. A change that alters instruction meaning needs a compiler
 commit, a VM commit, and a conformance case.
 
+## Embedding model
+
+The toolchain is pure Go. `go-mrbvm` consumes `bytecode.Irep` in memory or
+RITE bytes from a `.mrb` file, so `go-mrbc` intentionally does not implement
+`mrbc`'s C source output (`-B`, `-S`, `-s`) or multi-file compilation.
+Precompiled `.mrb` files can be embedded with `//go:embed`, and libraries can
+be preloaded with `gomruby -r` / `gomirb -r`. C embedding remains the role of
+the C mruby build.
+
 ## Shared contracts
 
 The public contract between the repositories is:

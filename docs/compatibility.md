@@ -247,8 +247,11 @@ exists:
   gomrbc does not misplace the output when the path has no extension; it
   always appends `.mrb` to the source path.
 
-`-B`/`-S`/`-s` (C source output) and multiple input files are not supported
-yet.
+`-B`/`-S`/`-s` (C source output) and multiple input files are intentionally
+out of scope. `go-mrbc` targets the pure-Go toolchain: `go-mrbvm` consumes
+`bytecode.Irep` in memory or RITE bytes from a `.mrb` file, so C embedding is
+unnecessary. Compile library files separately and preload the `.mrb` files
+with go-mrbvm's `-r` option.
 
 ## Versioning
 

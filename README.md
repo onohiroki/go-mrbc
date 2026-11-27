@@ -198,8 +198,11 @@ gomrbc extensions are also available:
   --debug      alias for -g
 ```
 
-`-B`/`-S`/`-s` (C source output) and multiple input files are not implemented
-yet.
+`-B`/`-S`/`-s` (C source output) and multiple input files are intentionally
+not supported. The target toolchain is `go-mrbvm`, which consumes RITE
+bytecode directly; C embedding is left to the C mruby build. Compile library
+files separately and preload the resulting `.mrb` files with `gomruby -r` or
+`gomirb -r` (both accept repeated `-r`).
 
 ## Library
 
@@ -236,6 +239,28 @@ The `bytecode` package contains the shared RITE format model, opcode
 definitions, and encoder/decoder. It is intentionally independent of the
 parser and compiler so that other tools, including a pure-Go VM, can import
 it directly.
+
+### Embedding with go-mrbvm
+
+Compile at runtime and pass the resulting irep to the VM:
+
+```go
+irep, err := mrbc.Compile(ctx, source, mrbc.Options{FilePath: "macro.rb"})
+// ...
+_, err = state.Execute(ctx, irep)
+```
+
+For a precompiled macro, write the `.mrb` at build time and embed it with Go's
+standard embedding support:
+
+```go
+//go:embed app.mrb
+var app []byte
+```
+
+Load precompiled libraries with `gomruby -r lib.mrb` or `gomirb -r lib.mrb`.
+C source output is specific to the C mruby build and is not part of the pure
+Go toolchain.
 
 ## Architecture
 

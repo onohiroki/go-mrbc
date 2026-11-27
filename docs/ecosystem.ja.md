@@ -73,6 +73,15 @@ VM が import するのは `go-mrbc/bytecode`（RITE のデータモデルと
 コンパイラ側の変更、VM 側の変更、conformance ケースを同じリリースサイクルで
 入れる。
 
+## 埋め込みモデル
+
+ツールチェーンは pure Go である。`go-mrbvm` はメモリ上の
+`bytecode.Irep` または `.mrb` ファイルの RITE バイト列を消費するため、
+`go-mrbc` は `mrbc` の C ソース出力（`-B` / `-S` / `-s`）と複数ファイル
+同時コンパイルを意図的に対象外とする。コンパイル済み `.mrb` は
+`//go:embed` で埋め込め、ライブラリは `gomruby -r` / `gomirb -r` で
+プリロードできる。C への埋め込みは C 実装の mruby ビルドの役割である。
+
 ## 共有契約
 
 - RITE 04.00 のコンテナ
